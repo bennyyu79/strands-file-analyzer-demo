@@ -1,99 +1,29 @@
-"""File Investigator Agent - LangGraph + AG-UI Protocol + CopilotKit Integration."""
+"""File Investigator Agent - LangGraph + AG-UI + CopilotKit Integration."""
 
 import base64
-import json
 import logging
 import os
-import re
 import uuid
-from typing import List, Optional, Annotated, Literal
+from typing import List, Literal
 
 from dotenv import load_dotenv
 from pdf_utils import extract_text_from_pdf, format_extracted_files_as_xml
 from pydantic import BaseModel, Field
-
-#from copilotkit import LangGraphAGUIAgent
-from ag_ui_langgraph import LangGraphAgent, add_langgraph_fastapi_endpoint
 from copilotkit import LangGraphAGUIAgent
 
-#from copilotkit.integrations.fastapi import add_fastapi_endpoint
-#from copilotkit import CopilotKitRemoteEndpoint, LangGraphAgent
-
 load_dotenv()
-
-# === Logging Configuration ===
-
-class BinaryDataRedactingFilter(logging.Filter):
-    """Redact binary/base64 data from log messages to keep logs readable."""
-
-    BASE64_PATTERN = re.compile(r'[A-Za-z0-9+/=]{100,}')
-    BYTES_LITERAL_PATTERN = re.compile(r"b'[^']{50,}'")
-    HEX_ESCAPE_PATTERN = re.compile(r'(\\x[0-9a-fA-F]{2}){20,}')
-    PDF_STREAM_PATTERN = re.compile(r'stream\s*[\s\S]{100,}?\s*endstream', re.IGNORECASE)
-
-    def _redact(self, text: str) -> str:
-        """Redact binary blobs from text."""
-        if not isinstance(text, str):
-            text = str(text)
-        text = self.BASE64_PATTERN.sub('[BASE64_DATA]', text)
-        text = self.BYTES_LITERAL_PATTERN.sub("[BYTES_DATA]", text)
-        text = self.HEX_ESCAPE_PATTERN.sub('[HEX_DATA]', text)
-        text = self.PDF_STREAM_PATTERN.sub('[PDF_STREAM]', text)
-        return text
-
-    def filter(self, record):
-        try:
-            if hasattr(record, 'msg') and isinstance(record.msg, str):
-                record.msg = self._redact(record.msg)
-            if hasattr(record, 'args') and record.args:
-                if isinstance(record.args, dict):
-                    record.args = {k: self._redact(v) if isinstance(v, str) else v
-                                  for k, v in record.args.items()}
-                elif isinstance(record.args, tuple):
-                    record.args = tuple(self._redact(a) if isinstance(a, str) else a
-                                       for a in record.args)
-        except Exception:
-            pass
-        return True
-
-
-class RedactingFormatter(logging.Formatter):
-    """Formatter that redacts binary data from final formatted message."""
-
-    REDACT_PATTERNS = [
-        (re.compile(r'[A-Za-z0-9+/=]{100,}'), '[BASE64_DATA]'),
-        (re.compile(r"b'[^']{50,}'"), '[BYTES_DATA]'),
-        (re.compile(r'(\\x[0-9a-fA-F]{2}){20,}'), '[HEX_DATA]'),
-    ]
-
-    def format(self, record):
-        result = super().format(record)
-        for pattern, replacement in self.REDACT_PATTERNS:
-            result = pattern.sub(replacement, result)
-        return result
-
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s - %(name)s - %(message)s",
 )
 
-redact_filter = BinaryDataRedactingFilter()
-redact_formatter = RedactingFormatter("%(levelname)s - %(name)s - %(message)s")
-for handler in logging.root.handlers:
-    handler.addFilter(redact_filter)
-    handler.setFormatter(redact_formatter)
-
-logging.getLogger("langgraph").setLevel(logging.INFO)
-logging.getLogger("langchain").setLevel(logging.INFO)
-logging.getLogger("agent").setLevel(logging.DEBUG)
-
 # === LangGraph and AG-UI Imports ===
 
-from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.graph import StateGraph, MessagesState, END
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command
-from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from langchain_aws import ChatBedrock
@@ -102,14 +32,14 @@ from langchain_openai import ChatOpenAI
 from botocore.config import Config as BotocoreConfig
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-# from ag_ui_langgraph import LangGraphAgent, add_langgraph_fastapi_endpoint  # Disabled - using copilotkit SDK instead
+from ag_ui_langgraph import add_langgraph_fastapi_endpoint
 
 # === Pydantic Models ===
 
 class Finding(BaseModel):
     """A key finding from document analysis."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
-    title: str = Field(description="Short title of the finding")
+    title: str = Field(description="Short title")
     description: str = Field(description="Detailed description")
     severity: str = Field(description="low, medium, high, or critical")
 
@@ -117,7 +47,7 @@ class Finding(BaseModel):
 class RedactedItem(BaseModel):
     """A detected redaction with speculation."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
-    location: str = Field(description="Where in the document (page/section)")
+    location: str = Field(description="Where in the document")
     speculation: str = Field(description="What might be hidden")
     confidence: int = Field(description="Confidence 0-100")
 
@@ -125,7 +55,7 @@ class RedactedItem(BaseModel):
 class Tweet(BaseModel):
     """A generated tweet."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
-    content: str = Field(description="Tweet text (max 280 chars)")
+    content: str = Field(description="Tweet text")
     posted: bool = Field(default=False)
 
 
@@ -142,27 +72,17 @@ class FileInvestigatorState(MessagesState):
 
 # === Tool Definitions ===
 
-# Global variables to store pending state updates from tools
-_pending_findings = []
-_pending_redacted = []
-_pending_tweets = []
-_pending_summary = ""
-
-
-
 @tool
 def update_findings(findings_list: dict) -> str:
-    """Update the Key Findings panel in the dashboard.
+    """Update the Key Findings panel.
 
     Args:
-        findings_list: Dict containing 'findings' array with title, description, severity
+        findings_list: Dict with 'findings' array containing title, description, severity
 
     Returns:
         Success message
     """
-    logger = logging.getLogger("agent.frontend")
     findings_data = findings_list.get("findings", []) if isinstance(findings_list, dict) else []
-
     findings = [
         Finding(
             title=f.get("title", "Untitled"),
@@ -171,29 +91,22 @@ def update_findings(findings_list: dict) -> str:
         )
         for f in findings_data
     ]
-
-    logger.info(f"update_findings called with {len(findings)} findings")
-
-    # Store findings in a global variable for the router to pick up
-    global _pending_findings
-    _pending_findings = findings
-
-    return f"Updated {len(findings)} findings"
+    # Return findings as JSON - will be picked up by call_model
+    import json
+    return json.dumps([f.model_dump() for f in findings])
 
 
 @tool
 def update_redacted(redacted_list: dict) -> str:
-    """Update the Redacted Content panel in the dashboard.
+    """Update the Redacted Content panel.
 
     Args:
-        redacted_list: Dict containing 'redacted_items' array with location, speculation, confidence
+        redacted_list: Dict with 'redacted_items' array containing location, speculation, confidence
 
     Returns:
         Success message
     """
-    logger = logging.getLogger("agent.frontend")
     items_data = redacted_list.get("redacted_items", []) if isinstance(redacted_list, dict) else []
-
     items = [
         RedactedItem(
             location=item.get("location", "Unknown"),
@@ -202,164 +115,102 @@ def update_redacted(redacted_list: dict) -> str:
         )
         for item in items_data
     ]
-
-    logger.info(f"update_redacted called with {len(items)} items")
-
-    # Store in state for the router to pick up
-    global _pending_redacted
-    _pending_redacted = items
-
-    return f"Updated {len(items)} redacted items"
+    import json
+    return json.dumps([i.model_dump() for i in items])
 
 
 @tool
 def update_tweets(tweets_list: dict) -> str:
-    """Update the Tweets panel in the dashboard.
+    """Update the Tweets panel.
 
     Args:
-        tweets_list: Dict containing 'tweets' array with content
+        tweets_list: Dict with 'tweets' array containing content
 
     Returns:
         Success message
     """
-    logger = logging.getLogger("agent.frontend")
     tweets_data = tweets_list.get("tweets", []) if isinstance(tweets_list, dict) else []
-
     tweets = [
-        Tweet(
-            content=t.get("content", ""),
-            posted=False
-        )
+        Tweet(content=t.get("content", ""), posted=False)
         for t in tweets_data
     ]
-
-    logger.info(f"update_tweets called with {len(tweets)} tweets")
-
-    # Store in state for the router to pick up
-    global _pending_tweets
-    _pending_tweets = tweets
-
-    return f"Updated {len(tweets)} tweets"
+    import json
+    return json.dumps([t.model_dump() for t in tweets])
 
 
 @tool
 def update_summary(summary_content: dict) -> str:
-    """Update the Summary panel in the dashboard.
+    """Update the Summary panel.
 
     Args:
-        summary_content: Dict containing 'summary' string
+        summary_content: Dict with 'summary' string
 
     Returns:
         Success message
     """
-    logger = logging.getLogger("agent.frontend")
     summary = summary_content.get("summary", "") if isinstance(summary_content, dict) else ""
-
-    logger.info(f"update_summary called with {len(summary)} chars")
-
-    # Store in state for the router to pick up
-    global _pending_summary
-    _pending_summary = summary
-
-    return "Updated summary"
+    return summary
 
 
 # === Model Configuration ===
 
 def create_model():
-    """Create and configure the LLM model for LangGraph.
+    """Create and configure the LLM model.
 
-    优先级顺序:
-    1. OpenAI 兼容配置 (OPENAI_BASE_URL, OPENAI_MODEL)
-    2. 自定义 Anthropic 配置 (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL)
-    3. AWS Bedrock 配置 (MODEL_ID, AWS_REGION)
+    Priority:
+    1. OpenAI compatible (OPENAI_BASE_URL, OPENAI_MODEL)
+    2. Custom Anthropic (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN)
+    3. AWS Bedrock (MODEL_ID, AWS_REGION)
     """
     logger = logging.getLogger("agent.config")
 
-    # 优先检查 OpenAI 兼容配置
+    # Check OpenAI compatible config
     openai_base_url = os.getenv("OPENAI_BASE_URL")
-    openai_model = os.getenv("OPENAI_MODEL", "gpt-4")
-    openai_api_key = os.getenv("OPENAI_API_KEY", "sk-not-needed")  # 某些兼容端点不需要密钥
-
     if openai_base_url:
-        logger.info(f"使用 OpenAI 兼容 API: {openai_base_url}")
-        logger.info(f"模型: {openai_model}")
-
-        model = ChatOpenAI(
-            model=openai_model,
+        logger.info(f"Using OpenAI compatible API: {openai_base_url}")
+        return ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gpt-4"),
             base_url=openai_base_url,
-            api_key=openai_api_key,
+            api_key=os.getenv("OPENAI_API_KEY", "sk-not-needed"),
             temperature=0.7,
             max_tokens=4096,
         )
-        return model
 
-    # 检查自定义 Anthropic 配置
+    # Check custom Anthropic config
     custom_base_url = os.getenv("ANTHROPIC_BASE_URL")
     custom_token = os.getenv("ANTHROPIC_AUTH_TOKEN")
-    custom_model = os.getenv("ANTHROPIC_MODEL")
-
     if custom_base_url and custom_token:
-        # 使用自定义 Anthropic API 配置
-        logger.info(f"使用自定义 Anthropic API: {custom_base_url}")
-
-        model = ChatAnthropic(
-            model=custom_model or "claude-3-5-sonnet-20241022",
+        logger.info(f"Using custom Anthropic API: {custom_base_url}")
+        return ChatAnthropic(
+            model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
             api_key=custom_token,
             base_url=custom_base_url,
             temperature=0.7,
             max_tokens=4096,
         )
-        return model
 
-    # 回退到原有配置逻辑
+    # Fallback to AWS Bedrock
     region = os.getenv("AWS_REGION", "us-west-1")
     model_id = os.getenv("MODEL_ID", "anthropic.claude-haiku-4-5-20251001-v1:0")
+    logger.info(f"Using AWS Bedrock: {model_id}")
 
     if model_id.startswith("openai."):
-        model = ChatBedrock(
+        return ChatBedrock(
             model_id=model_id,
             region_name=region,
             model_kwargs={"temperature": 0.7},
-            config=BotocoreConfig(
-                region_name=region,
-                connect_timeout=300,
-                read_timeout=300,
-            ),
+            config=BotocoreConfig(region_name=region, connect_timeout=300, read_timeout=300),
         )
-    elif model_id.startswith("claude-") or "anthropic" in model_id.lower():
-        if os.getenv("ANTHROPIC_API_KEY"):
-            model = ChatAnthropic(
-                model=model_id,
-                temperature=0.7,
-                max_tokens=4096,
-            )
-        else:
-            model = ChatBedrock(
-                model_id=model_id,
-                region_name=region,
-                temperature=0.7,
-                max_tokens=4096,
-                config=BotocoreConfig(
-                    region_name=region,
-                    connect_timeout=300,
-                    read_timeout=300,
-                ),
-            )
+    elif (model_id.startswith("claude-") or "anthropic" in model_id.lower()) and os.getenv("ANTHROPIC_API_KEY"):
+        return ChatAnthropic(model=model_id, temperature=0.7, max_tokens=4096)
     else:
-        model = ChatBedrock(
+        return ChatBedrock(
             model_id=model_id,
             region_name=region,
             temperature=0.7,
             max_tokens=4096,
-            config=BotocoreConfig(
-                region_name=region,
-                connect_timeout=300,
-                read_timeout=300,
-            ),
+            config=BotocoreConfig(region_name=region, connect_timeout=300, read_timeout=300),
         )
-
-    return model
 
 
 # === Prompt Building ===
@@ -372,46 +223,31 @@ def build_investigator_prompt(state: FileInvestigatorState, user_message: str) -
 
     # Process uploaded files
     uploadedFiles = state.get("uploadedFiles", [])
-    logger.info(f"📁 收到 {len(uploadedFiles)} 个文件")
+    logger.info(f"Processing {len(uploadedFiles)} files")
 
-    for idx, file_info in enumerate(uploadedFiles):
+    for file_info in uploadedFiles:
         file_name = file_info.get("name", "document.pdf")
         base64_data = file_info.get("base64", "")
-        file_size = len(base64_data) if base64_data else 0
-
-        logger.info(f"📄 [{idx+1}/{len(uploadedFiles)}] 文件名: {file_name}, Base64 大小: {file_size} 字节")
 
         if not base64_data:
-            logger.warning(f"⚠️  文件 {file_name} 没有 base64 数据,跳过")
+            logger.warning(f"File {file_name} has no base64 data")
             continue
 
         try:
             pdf_bytes = base64.b64decode(base64_data)
-            file_size_mb = len(pdf_bytes) / (1024 * 1024)
-            logger.info(f"📦 解码后 PDF 大小: {file_size_mb:.2f} MB")
-
             extracted = extract_text_from_pdf(pdf_bytes, file_name)
             if extracted:
-                text_preview = extracted[:100] if len(extracted) > 100 else extracted
-                logger.info(f"✅ 文本提取成功, 预览: {text_preview}...")
-                logger.info(f"📝 提取的文本长度: {len(extracted)} 字符")
+                logger.info(f"Extracted {len(extracted)} chars from {file_name}")
                 extracted_texts.append((file_name, extracted))
             else:
-                logger.warning(f"⚠️  文件 {file_name} 文本提取失败")
-
+                logger.warning(f"Failed to extract text from {file_name}")
         except Exception as e:
-            logger.error(f"❌ 处理文件 {file_name} 失败: {e}", exc_info=True)
-            context_parts.append(f"\n**FILE: {file_name}**\n[Error processing file: {str(e)}]\n")
+            logger.error(f"Error processing {file_name}: {e}")
 
     if extracted_texts:
-        logger.info(f"🔍 extracted_texts 内容: {extracted_texts}")
         xml_content = format_extracted_files_as_xml(extracted_texts)
         context_parts.append(f"\n{xml_content}\n")
-        logger.info(f"🎨 已将 {len(extracted_texts)} 个文件格式化为 XML")
-        logger.info(f"📄 XML 内容长度: {len(xml_content)} 字符")
-        logger.info(f"📋 XML 预览: {xml_content[:500]}...")
-    else:
-        logger.warning("⚠️  没有成功提取任何文件内容")
+        logger.info(f"Formatted {len(extracted_texts)} files as XML")
 
     # Build full prompt
     system_prompt = """You are the File Investigator - a sardonic document analyst with dry humor.
@@ -450,13 +286,9 @@ NOTE: All PDFs are provided as extracted text in XML format.
 """
 
     if context_parts:
-        full_prompt = f"{system_prompt}\n\n## DOCUMENTS TO ANALYZE:\n{''.join(context_parts)}\n\n## USER MESSAGE:\n{user_message}"
-        logger.info(f"🎯 最终 prompt 长度: {len(full_prompt)} 字符")
+        return f"{system_prompt}\n\n## DOCUMENTS TO ANALYZE:\n{''.join(context_parts)}\n\n## USER MESSAGE:\n{user_message}"
     else:
-        full_prompt = f"{system_prompt}\n\n## USER MESSAGE:\n{user_message}"
-        logger.info(f"🎯 最终 prompt 长度: {len(full_prompt)} 字符 (无文件)")
-
-    return full_prompt
+        return f"{system_prompt}\n\n## USER MESSAGE:\n{user_message}"
 
 
 # === LangGraph Nodes ===
@@ -464,57 +296,28 @@ NOTE: All PDFs are provided as extracted text in XML format.
 def call_model(state: FileInvestigatorState, config: RunnableConfig) -> Command[Literal["tools", "__end__"]]:
     """Node that calls the LLM model."""
     logger = logging.getLogger("agent.model")
-
-    # Get user message from last message
     messages = state.get("messages", [])
-    user_message = ""
-    if messages and isinstance(messages[-1], HumanMessage):
-        user_message = messages[-1].content
+    user_message = messages[-1].content if messages and isinstance(messages[-1], HumanMessage) else ""
 
-    logger.info(f"=" * 60)
-    logger.info(f"🤖 开始处理用户消息")
-    logger.info(f"📨 用户消息: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
+    logger.info(f"Processing message: {user_message[:100]}")
 
-    # 记录当前状态
-    uploadedFiles = state.get("uploadedFiles", [])
-    findings = state.get("findings", [])
-    redactedContent = state.get("redactedContent", [])
-    tweets = state.get("tweets", [])
-    summary = state.get("summary", "")
+    # Check if last message is ToolMessage (tools just executed)
+    if messages and type(messages[-1]).__name__ == "ToolMessage":
+        logger.info("Tools executed, generating final response")
 
-    logger.info(f"📊 当前状态:")
-    logger.info(f"  - 文件数: {len(uploadedFiles)}")
-    logger.info(f"  - 发现: {len(findings)} 条")
-    logger.info(f"  - 涂黑: {len(redactedContent)} 条")
-    logger.info(f"  - 推文: {len(tweets)} 条")
-    logger.info(f"  - 摘要: {'有' if summary else '无'}")
+        findings = state.get("findings", [])
+        redactedContent = state.get("redactedContent", [])
+        tweets = state.get("tweets", [])
+        summary = state.get("summary", "")
 
-    # 检查最后一条消息是否是 ToolMessage
-    if messages:
-        last_msg = messages[-1]
-        msg_type = type(last_msg).__name__
-        logger.info(f"📄 最后一条消息类型: {msg_type}")
-
-        # 如果最后一条消息是 ToolMessage，说明工具刚执行完
-        # 需要再次调用模型来生成最终回复
-        if msg_type == "ToolMessage":
-            logger.info(f"🔧 检测到工具执行结果，生成最终回复...")
-            logger.info(f"=" * 60)
-
-            # 创建一个简单的完成消息
-            final_response = AIMessage(
-                content="✅ 文档分析完成！请查看右侧面板的结果。我发现了以下关键信息：\n\n" +
-                         (f"• {len(findings)} 条关键发现\n" if findings else "") +
-                         (f"• {len(redactedContent)} 处涂黑内容\n" if redactedContent else "") +
-                         (f"• {len(tweets)} 条推文草稿\n" if tweets else "") +
-                         (f"• {summary[:100] if summary else ''}...\n" if summary else ""),
-            )
-
-            return Command(goto="__end__", update={"messages": [final_response]})
-
-    logger.info(f"🔄 调用模型...")
-    logger.info(f"📨 当前消息数量: {len(messages)}")
-    logger.info(f"=" * 60)
+        final_response = AIMessage(
+            content="✅ 文档分析完成！请查看右侧面板的结果。我发现了以下关键信息：\n\n" +
+                     (f"• {len(findings)} 条关键发现\n" if findings else "") +
+                     (f"• {len(redactedContent)} 处涂黑内容\n" if redactedContent else "") +
+                     (f"• {len(tweets)} 条推文草稿\n" if tweets else "") +
+                     (f"• {summary[:100] if summary else ''}...\n" if summary else ""),
+        )
+        return Command(goto="__end__", update={"messages": [final_response]})
 
     # Build prompt with context
     prompt = build_investigator_prompt(state, user_message)
@@ -524,118 +327,83 @@ def call_model(state: FileInvestigatorState, config: RunnableConfig) -> Command[
     tools = [update_findings, update_redacted, update_tweets, update_summary]
     model_with_tools = model.bind_tools(tools)
 
-    # Invoke model without passing config to avoid serialization issues
-    # The config parameter contains non-serializable objects like BotocoreConfig
-    response = model_with_tools.invoke([
-        SystemMessage(content=prompt),
-        *messages
-    ])
-
-    logger.info(f"=" * 60)
-    logger.info(f"✅ 模型响应完成")
+    # Invoke model
+    response = model_with_tools.invoke([SystemMessage(content=prompt), *messages])
 
     # Check for tool calls
-    tool_calls = response.tool_calls
-    if tool_calls:
-        logger.info(f"🔧 模型调用了 {len(tool_calls)} 个工具:")
-        for i, call in enumerate(tool_calls, 1):
-            logger.info(f"  {i}. {call.get('name', 'unknown')}")
-        # Route to tools node with the response
+    if response.tool_calls:
+        logger.info(f"Model called {len(response.tool_calls)} tools")
         return Command(goto="tools", update={"messages": [response]})
 
     # No tool calls - end the graph
-    logger.info(f"💬 模型直接回复(无工具调用)")
-    logger.info(f"=" * 60)
-
-    # IMPORTANT: When there are no tool calls, strip any tool-related metadata
-    # from the response to prevent CopilotKit from thinking tools are still active
-    clean_response = AIMessage(
-        content=response.content,
-        id=response.id,
-    )
-
+    logger.info("Model response without tool calls")
+    clean_response = AIMessage(content=response.content, id=response.id)
     return Command(goto="__end__", update={"messages": [clean_response]})
 
 
-def apply_tool_results(state: FileInvestigatorState) -> Command:
-    """Apply pending state updates from tool calls."""
-    global _pending_findings, _pending_redacted, _pending_tweets, _pending_summary
+def tools_router(state: FileInvestigatorState) -> Command:
+    """Process tool results and update state."""
+    logger = logging.getLogger("agent.tools")
 
-    logger = logging.getLogger("agent.state")
+    messages = state.get("messages", [])
     updates = {}
-    update_keys = []
 
-    # Log current message state
-    messages = state.get("messages", [])
-    logger.info(f"📨 apply_tool_results: 当前有 {len(messages)} 条消息")
+    # Process tool messages and update state
+    for msg in messages:
+        if type(msg).__name__ == "ToolMessage":
+            tool_call_id = getattr(msg, 'tool_call_id', '')
+            content = msg.content
 
-    # Check if there are any pending tool calls
-    pending_tool_calls = []
-    for i, msg in enumerate(messages):
-        msg_type = type(msg).__name__
-        if msg_type == "AIMessage" and hasattr(msg, 'tool_calls') and msg.tool_calls:
-            logger.info(f"  [{i}] AIMessage with {len(msg.tool_calls)} tool calls")
-            # Track tool call IDs
-            for call in msg.tool_calls:
-                if 'id' in call:
-                    pending_tool_calls.append(call['id'])
-                    logger.info(f"      - Tool call ID: {call['id']}")
-        elif msg_type == "ToolMessage":
-            logger.info(f"  [{i}] ToolMessage (tool_call_id: {getattr(msg, 'tool_call_id', 'N/A')})")
-        else:
-            logger.info(f"  [{i}] {msg_type}")
+            # Find which tool was called
+            for earlier_msg in messages:
+                if type(earlier_msg).__name__ == "AIMessage" and hasattr(earlier_msg, 'tool_calls'):
+                    for tc in earlier_msg.tool_calls:
+                        if tc.get('id') == tool_call_id:
+                            tool_name = tc.get('name', '')
+                            logger.info(f"Processing {tool_name} result")
 
-    if pending_tool_calls:
-        logger.info(f"⚠️ 检测到 {len(pending_tool_calls)} 个待处理的工具调用")
+                            # Parse tool output and update state
+                            import json
+                            try:
+                                if tool_name == "update_findings":
+                                    if not content or not isinstance(content, str):
+                                        logger.warning(f"Empty or invalid content for {tool_name}")
+                                        updates["findings"] = []
+                                    else:
+                                        findings_data = json.loads(content) if content else []
+                                        updates["findings"] = [Finding(**f) for f in findings_data] if findings_data else []
+                                elif tool_name == "update_redacted":
+                                    if not content or not isinstance(content, str):
+                                        logger.warning(f"Empty or invalid content for {tool_name}")
+                                        updates["redactedContent"] = []
+                                    else:
+                                        redacted_data = json.loads(content) if content else []
+                                        updates["redactedContent"] = [RedactedItem(**r) for r in redacted_data] if redacted_data else []
+                                elif tool_name == "update_tweets":
+                                    if not content or not isinstance(content, str):
+                                        logger.warning(f"Empty or invalid content for {tool_name}")
+                                        updates["tweets"] = []
+                                    else:
+                                        tweets_data = json.loads(content) if content else []
+                                        updates["tweets"] = [Tweet(**t) for t in tweets_data] if tweets_data else []
+                                elif tool_name == "update_summary":
+                                    updates["summary"] = content if content else ""
+                            except json.JSONDecodeError as e:
+                                logger.error(f"JSON parsing error for {tool_name}: {e}")
+                                # Set empty values on JSON error
+                                if tool_name == "update_findings":
+                                    updates["findings"] = []
+                                elif tool_name == "update_redacted":
+                                    updates["redactedContent"] = []
+                                elif tool_name == "update_tweets":
+                                    updates["tweets"] = []
+                                elif tool_name == "update_summary":
+                                    updates["summary"] = ""
+                            except Exception as e:
+                                logger.error(f"Error parsing {tool_name} result: {e}")
 
-    # Apply pending updates
-    if _pending_findings:
-        updates["findings"] = _pending_findings
-        update_keys.append(f"{len(_pending_findings)} findings")
-        _pending_findings = []
-
-    if _pending_redacted:
-        updates["redactedContent"] = _pending_redacted
-        update_keys.append(f"{len(_pending_redacted)} redacted items")
-        _pending_redacted = []
-
-    if _pending_tweets:
-        updates["tweets"] = _pending_tweets
-        update_keys.append(f"{len(_pending_tweets)} tweets")
-        _pending_tweets = []
-
-    if _pending_summary:
-        updates["summary"] = _pending_summary
-        update_keys.append("summary")
-        _pending_summary = ""
-
-    if update_keys:
-        logger.info(f"🔄 Applied state updates: {', '.join(update_keys)}")
-
-    # Return Command to update state without modifying messages
-    # ToolNode already added ToolMessages to the message list
-    return Command(update=updates)
-
-
-def should_continue(state: FileInvestigatorState) -> str:
-    """Determine if we should continue to tools or end."""
-    messages = state.get("messages", [])
-    logger = logging.getLogger("agent.router")
-
-    if messages:
-        last_message = messages[-1]
-        logger.info(f"📍 should_continue: 检查最后一条消息类型: {type(last_message).__name__}")
-
-        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            logger.info(f"🔧 检测到 {len(last_message.tool_calls)} 个工具调用，路由到 tools")
-            return "tools"
-        else:
-            logger.info(f"✅ 无工具调用，可以结束")
-
-    # IMPORTANT: Always end after generating a response without tool calls
-    # This ensures that ag-ui-langgraph sees the complete execution
-    logger.info(f"🏁 流程结束")
-    return END
+    logger.info(f"State updates: {list(updates.keys())}")
+    return Command(goto="agent", update=updates)
 
 
 # === Graph Construction ===
@@ -646,16 +414,15 @@ def create_graph():
 
     tools = [update_findings, update_redacted, update_tweets, update_summary]
 
-    # Create workflow graph following the reference pattern
+    # Create workflow graph
     workflow = StateGraph(FileInvestigatorState)
 
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", ToolNode(tools=tools))
-    workflow.add_node("update_state", apply_tool_results)
+    workflow.add_node("tools_router", tools_router)
 
-    # After tools execute, apply state updates, then go back to agent
-    workflow.add_edge("tools", "update_state")
-    workflow.add_edge("update_state", "agent")
+    # Agent -> Tools -> Router -> Agent (loop back)
+    workflow.add_edge("tools", "tools_router")
     workflow.set_entry_point("agent")
 
     # Add checkpointer for state persistence
@@ -667,19 +434,16 @@ def create_graph():
 
 # === AG-UI Integration ===
 
-# Create FastAPI app
 app = FastAPI(title="File Investigator Agent")
 
-# === CORS Configuration ===
-# Allow frontend to communicate with backend
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://192.168.214.102:3000",
         "http://47.120.47.251:3002",
-        "http://47.120.47.251:3003",  # 后端自己也可能被访问
-        # 开发环境:允许所有本地访问
+        "http://47.120.47.251:3003",
         "http://localhost",
         "http://192.168.214.102",
         "http://47.120.47.251",
@@ -693,172 +457,45 @@ app.add_middleware(
 # Create the LangGraph
 graph = create_graph()
 
-# Add exception handler to ag-ui-langgraph errors
+# Exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    """Global exception handler to catch and log errors without crashing."""
+    """Global exception handler."""
     import traceback
     logger = logging.getLogger("agent.error")
     logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}")
     logger.error(traceback.format_exc())
-    # Return a JSON response even for errors
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=500,
         content={"detail": f"Internal server error: {type(exc).__name__}: {str(exc)}"}
     )
 
-# Note: AG-UI automatically handles camelCase <-> snake_case conversion
+# Create agent
 agent = LangGraphAGUIAgent(
     name="file_investigator",
     graph=graph,
     description="AI-powered document analysis agent with dry humor",
 )
 
-# Initialize messages_in_process to prevent NoneType error
-agent.messages_in_process = {}
+# Initialize messages_in_process with safety checks
+if not hasattr(agent, 'messages_in_process') or agent.messages_in_process is None:
+    agent.messages_in_process = {}
 
-# Monkey-patch the agent to fix the NoneType error in ag_ui_langgraph
-import types
+# Add safety wrapper for set_message_in_progress
+original_set_message = agent.set_message_in_progress
 
-# Get the original unbound method
-original_set_message_in_progress = agent.__class__.set_message_in_progress
+def safe_set_message_in_progress(run_id, message_data):
+    """Safely set message in progress with null checks."""
+    if not hasattr(agent, 'messages_in_process') or agent.messages_in_process is None:
+        agent.messages_in_process = {}
+    if isinstance(agent.messages_in_process, dict):
+        agent.messages_in_process[run_id] = message_data
 
-def patched_set_message_in_progress(self, run_id=None, metadata=None):
-    """Patched version that handles None run_id and missing parameters."""
-    logger = logging.getLogger("agent.patch")
+agent.set_message_in_progress = safe_set_message_in_progress
 
-    # Handle missing metadata parameter
-    if metadata is None:
-        logger.warning(f"⚠️ metadata is None, skipping message_in_progress update")
-        return
-
-    # Handle missing run_id parameter
-    if run_id is None:
-        logger.warning(f"⚠️ run_id is None, skipping message_in_progress update")
-        return
-
-    # If both parameters are present, call the original function
-    try:
-        original_set_message_in_progress(self, run_id, metadata)
-    except Exception as e:
-        logger.error(f"❌ Error in set_message_in_progress: {e}")
-
-# Bind the patched method to the instance
-agent.set_message_in_progress = types.MethodType(patched_set_message_in_progress, agent)
-
-logger = logging.getLogger("agent.patch")
-logger.info("✅ Applied monkey-patch to fix ag-ui-langgraph NoneType error")
-
-# Monkey-patch to filter out non-serializable config objects
-def filter_config_for_serialization(config):
-    """Filter out non-serializable objects from config dict."""
-    if not config:
-        return {}
-
-    filtered = {}
-    for key, value in config.items():
-        # Skip BotocoreConfig and other non-serializable objects
-        if key == "config":
-            continue
-        # Skip nested config objects
-        if isinstance(value, dict):
-            filtered[key] = filter_config_for_serialization(value)
-        else:
-            # Try to serialize to check if it's JSON-serializable
-            try:
-                import json
-                json.dumps(value)
-                filtered[key] = value
-            except (TypeError, ValueError):
-                # Skip non-serializable objects
-                logger.debug(f"⚠️ Skipping non-serializable config key: {key}")
-                continue
-    return filtered
-
-# Patch the _handle_stream_events method to filter config and fix tool call lifecycle
-original_handle_stream_events = agent.__class__._handle_stream_events
-
-async def patched_handle_stream_events(self, input):
-    """Patched version that filters config and fixes tool call lifecycle."""
-    logger = logging.getLogger("agent.patch")
-
-    # Filter the input to remove non-serializable config
-    if "config" in input:
-        filtered_config = filter_config_for_serialization(input["config"])
-        input = input.copy(update={"config": filtered_config})
-        logger.debug(f"✅ Filtered config for serialization")
-
-    # Track tool call IDs from AIMessage events
-    tool_call_ids_from_messages = set()
-
-    # Call original method and intercept events
-    async for event in original_handle_stream_events(self, input):
-        # Try to parse the event - it might be a dict or have different structure
-        try:
-            # Handle different event formats
-            if isinstance(event, dict):
-                event_data = event
-            elif hasattr(event, 'model_dump'):
-                event_data = event.model_dump()
-            elif hasattr(event, 'dict'):
-                event_data = event.dict()
-            else:
-                # Try to parse as JSON string
-                import json
-                event_str = str(event)
-                if event_str and event_str != 'None':
-                    event_data = json.loads(event_str)
-                else:
-                    event_data = None
-
-            if event_data:
-                # LangChain events use "event" field to indicate type
-                event_type = event_data.get("event", "")
-
-                # Track tool calls from on_chat_model_start events
-                if event_type == "on_chat_model_start":
-                    input_data = event_data.get("data", {}).get("input", {})
-                    if isinstance(input_data, dict):
-                        messages = input_data.get("messages", [])
-                        for msg in messages:
-                            if isinstance(msg, dict):
-                                tool_calls = msg.get("tool_calls", [])
-                                for tc in tool_calls:
-                                    if isinstance(tc, dict):
-                                        tc_id = tc.get("id") or tc.get("tool_call_id")
-                                        if tc_id:
-                                            tool_call_ids_from_messages.add(tc_id)
-                                            logger.debug(f"🔧 Tracking tool call ID: {tc_id}")
-
-                # Check for on_tool_end events
-                if event_type == "on_tool_end":
-                    # Tool completed - mark as done
-                    pass
-
-                # Check for on_chain_end (run finished)
-                if event_type == "on_chain_end":
-                    logger.debug(f"🏁 Chain finished. Tracked tool calls: {len(tool_call_ids_from_messages)}")
-
-                    # Check if we need to inject tool completion events
-                    if tool_call_ids_from_messages:
-                        logger.info(f"✅ Found {len(tool_call_ids_from_messages)} tool calls in this run")
-
-        except Exception as e:
-            # Silently ignore parsing errors - we don't want to break the stream
-            pass
-
-        # Always yield the original event
-        yield event
-
-# Bind the patched method
-agent._handle_stream_events = types.MethodType(patched_handle_stream_events, agent)
-
-logger.info("✅ Applied monkey-patch to filter non-serializable config objects and fix tool call lifecycle")
-
-# Add AG-UI endpoint to FastAPI app
+# Add AG-UI endpoint
 add_langgraph_fastapi_endpoint(app, agent, path="/copilotkit")
-
 
 
 # === Main ===

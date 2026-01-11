@@ -30,27 +30,30 @@ export default function FileInvestigatorPage() {
     initialState: INITIAL_STATE,
   });
 
-  // Ref to track current state for use in tool handlers (avoids stale closure)
+  // Ref to track current state for tool handlers
   const stateRef = useRef(state);
   useEffect(() => {
     stateRef.current = state;
-    console.log("🔄 状态更新:", {
+    // Debug: Log state changes
+    console.log("📊 State updated:", {
       uploadedFiles: state.uploadedFiles?.length || 0,
+      findings: state.findings?.length || 0,
+      redactedContent: state.redactedContent?.length || 0,
+      tweets: state.tweets?.length || 0,
+      summary: state.summary ? "present" : "none",
       status: state.analysisStatus,
-      findings: state.findings?.length || 0
     });
   }, [state]);
 
   // Handle files change
   const handleFilesChange = useCallback(
     (files: UploadedFile[]) => {
-      console.log("📁 文件更新:", files.length, "个文件");
-      console.log("📄 文件列表:", files.map(f => f.name));
+      console.log("📁 Files changed:", files.length, "files");
+      console.log("📄 File names:", files.map(f => f.name));
       setState({
         ...state,
         uploadedFiles: files,
         analysisStatus: "idle",
-        // Reset results when files change
         findings: [],
         redactedContent: [],
         tweets: [],
@@ -67,7 +70,7 @@ export default function FileInvestigatorPage() {
     setTimeout(() => setToastMessage(null), 2000);
   }, []);
 
-  // Handle mock tweet post
+  // Handle tweet post
   const handlePostTweet = useCallback(
     (id: string) => {
       setState({
@@ -95,9 +98,7 @@ export default function FileInvestigatorPage() {
     [setState]
   );
 
-  // Tools update state directly, dashboard panels render from state
-
-  // === Default Tool Renderer ===
+  // Default Tool Renderer
   useDefaultTool({
     render: (props) => (
       <DefaultToolCard
