@@ -524,21 +524,31 @@ def call_model(state: FileInvestigatorState, config) -> Command:
         logger.info(f"🔧 模型调用了 {len(response.tool_calls)} 个工具:")
         for i, call in enumerate(response.tool_calls, 1):
             logger.info(f"  {i}. {call.get('name', 'unknown')}")
+        # Return response with tool calls - will route to tools node
+        return {
+            "messages": [response],
+            # Preserve these fields to prevent them from being reset
+            "uploadedFiles": state.get("uploadedFiles", []),
+            "findings": state.get("findings", []),
+            "redactedContent": state.get("redactedContent", []),
+            "tweets": state.get("tweets", []),
+            "summary": state.get("summary", ""),
+        }
     else:
         logger.info(f"💬 模型直接回复(无工具调用)")
-
-    logger.info(f"=" * 60)
-
-    # Preserve existing state fields to avoid resetting them
-    return {
-        "messages": [response],
-        # Preserve these fields to prevent them from being reset
-        "uploadedFiles": state.get("uploadedFiles", []),
-        "findings": state.get("findings", []),
-        "redactedContent": state.get("redactedContent", []),
-        "tweets": state.get("tweets", []),
-        "summary": state.get("summary", ""),
-    }
+        logger.info(f"=" * 60)
+        # No tool calls - this is the final response, end the run
+        return Command(
+            update={
+                "messages": [response],
+                # Preserve these fields to prevent them from being reset
+                "uploadedFiles": state.get("uploadedFiles", []),
+                "findings": state.get("findings", []),
+                "redactedContent": state.get("redactedContent", []),
+                "tweets": state.get("tweets", []),
+                "summary": state.get("summary", ""),
+            }
+        )
 
 
 def apply_tool_results(state: FileInvestigatorState) -> Command:
@@ -674,8 +684,15 @@ def create_graph():
             "__end__": END,
         }
     )
-    # After tools execute, go back to agent for final response
-    builder.add_edge("tools", "agent")
+    # After tools execute, check if we should end or continue
+    builder.add_conditional_edges(
+        "tools",
+        lambda state: "agent" if state.get("messages", []) and isinstance(state.get("messages", [])[-1], ToolMessage) else END,
+        {
+            "agent": "agent",
+            "__end__": END,
+        }
+    )
 
     # Add checkpointer for state persistence
     memory = MemorySaver()
