@@ -7,22 +7,29 @@ import {
 import { HttpAgent } from "@ag-ui/client";
 import { NextRequest } from "next/server";
 
-// 1. You can use any service adapter here for multi-agent support. We use
-//    the empty adapter since we're only using one agent.
+// 1. Service adapter for multi-agent support
 const serviceAdapter = new ExperimentalEmptyAdapter();
 
-// 2. Create the CopilotRuntime instance and utilize the Strands AG-UI
-//    integration to setup the connection.
+// 🐛 DEBUG: Log agent URL
+const agentUrl = process.env.AGENT_URL || "http://47.120.47.251:3003";
+console.log('🔧 [DEBUG] CopilotKit Runtime Agent URL:', agentUrl);
+
+// 🔧 FIX: 创建 CopilotRuntime 实例
+// 暂时不配置 agents，让基本的 GraphQL 查询（如 availableAgents）能正常工作
 const runtime = new CopilotRuntime({
-  agents: {
-    // File Investigator agent - Strands + AG-UI + Claude
-    file_investigator: new HttpAgent({
-      url: process.env.AGENT_URL || "http://localhost:8000",
-    }),
-  },
+   agents: {
+     file_investigator: new HttpAgent({
+        url: agentUrl,
+      }),
+   },
 });
 
-// 3. Build a Next.js API route that handles the CopilotKit runtime requests.
+// 后续可以动态添加 agents
+// runtime.agents = {
+//   file_investigator: new HttpAgent({ url: agentUrl }),
+// };
+
+// 3. Build a Next.js App Router Endpoint that handles the CopilotKit runtime requests.
 export const POST = async (req: NextRequest) => {
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime,

@@ -32,7 +32,7 @@ const readFileAsBase64 = (file: File): Promise<string> => {
   });
 };
 
-export function FileUpload({ onFilesChange, currentFiles }: FileUploadProps) {
+export function FileUpload({ onFilesChange, currentFiles = [] }: FileUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
@@ -41,31 +41,52 @@ export function FileUpload({ onFilesChange, currentFiles }: FileUploadProps) {
     async (fileList: FileList) => {
       const newFiles: UploadedFile[] = [];
 
+      console.log('📁 [DEBUG] FileUpload: Starting file processing', {
+        totalFiles: fileList.length,
+        currentFilesCount: currentFiles.length
+      });
+
       setIsLoading(true);
       setLoadingMessage(
         LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)]
       );
 
       for (const file of Array.from(fileList)) {
+        console.log('📄 [DEBUG] FileUpload: Processing file', {
+          name: file.name,
+          type: file.type,
+          size: file.size
+        });
+
         // Validate PDF type
         if (file.type !== "application/pdf") {
+          console.warn('❌ [DEBUG] FileUpload: Not a PDF', file.name);
           alert(`${file.name}: Not a PDF file, skipping`);
           continue;
         }
 
         // Validate size
         if (file.size > MAX_FILE_SIZE) {
+          console.warn('❌ [DEBUG] FileUpload: File too large', file.name, file.size);
           alert(`${file.name}: Exceeds 150MB limit, skipping`);
           continue;
         }
 
         // Check duplicates
         if (currentFiles.some((f) => f.name === file.name)) {
+          console.warn('⚠️ [DEBUG] FileUpload: Duplicate file', file.name);
           continue; // Skip silently
         }
 
         try {
+          console.log('🔄 [DEBUG] FileUpload: Reading file as base64...', file.name);
           const base64 = await readFileAsBase64(file);
+          console.log('✅ [DEBUG] FileUpload: Successfully read file', {
+            name: file.name,
+            originalSize: file.size,
+            base64Length: base64.length
+          });
+
           newFiles.push({
             name: file.name,
             base64,
@@ -73,13 +94,29 @@ export function FileUpload({ onFilesChange, currentFiles }: FileUploadProps) {
             sizeBytes: file.size,
           });
         } catch (error) {
-          console.error(`Failed to read ${file.name}:`, error);
+          console.error(`❌ [DEBUG] FileUpload: Failed to read ${file.name}:`, error);
           alert(`${file.name}: Failed to read file`);
         }
       }
 
+      console.log('📊 [DEBUG] FileUpload: Processed files', {
+        newFilesCount: newFiles.length,
+        currentFilesCount: currentFiles.length,
+        totalBeforeLimit: newFiles.length + currentFiles.length
+      });
+
       // Enforce max files limit
       const combined = [...currentFiles, ...newFiles].slice(0, MAX_FILES);
+
+      console.log('📤 [DEBUG] FileUpload: Calling onFilesChange', {
+        combinedCount: combined.length,
+        files: combined.map(f => ({
+          name: f.name,
+          size: f.sizeBytes,
+          base64Length: f.base64?.length || 0
+        }))
+      });
+
       onFilesChange(combined);
       setIsLoading(false);
     },

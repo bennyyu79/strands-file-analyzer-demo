@@ -30,7 +30,7 @@ export type AnalysisStatus = 'idle' | 'proposed' | 'analyzing' | 'complete';
 export interface FileInvestigatorState {
   uploadedFiles: UploadedFile[];
   findings: Finding[];
-  redactedContent: RedactedItem[];
+  redacted: RedactedItem[];
   tweets: Tweet[];
   summary: string | null;
   analysisStatus: AnalysisStatus;
@@ -39,7 +39,7 @@ export interface FileInvestigatorState {
 export const INITIAL_STATE: FileInvestigatorState = {
   uploadedFiles: [],
   findings: [],
-  redactedContent: [],
+  redacted: [],
   tweets: [],
   summary: null,
   analysisStatus: 'idle',

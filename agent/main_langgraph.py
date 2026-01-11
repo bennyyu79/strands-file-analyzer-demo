@@ -1,4 +1,4 @@
-"""File Investigator Agent - LangGraph + AG-UI Protocol + CopilotKit Integration."""
+"""File Investigator Agent - LangGraph + AG-UI + CopilotKit Integration."""
 
 import base64
 import json
@@ -6,8 +6,29 @@ import logging
 import os
 import re
 import uuid
-from typing import List, Optional, Annotated
+from typing import List, Optional, TypedDict, Annotated
+from langchain_core.runnables import RunnableConfig
 
+# LangGraph and LangChain imports
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.prebuilt import ToolNode
+from langgraph.types import Command
+from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
+from langchain_aws import ChatBedrock
+from langchain_anthropic import ChatAnthropic
+from botocore.config import Config as BotocoreConfig
+
+# FastAPI and Pydantic
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+
+class StateUpdate(BaseModel):
+    """Simple state update response for API."""
+    state: dict
+
+# PDF processing
 from dotenv import load_dotenv
 from pdf_utils import extract_text_from_pdf, format_extracted_files_as_xml
 from pydantic import BaseModel, Field
@@ -81,21 +102,7 @@ logging.getLogger("langgraph").setLevel(logging.INFO)
 logging.getLogger("langchain").setLevel(logging.INFO)
 logging.getLogger("agent").setLevel(logging.DEBUG)
 
-# === LangGraph and AG-UI Imports ===
-
-from langgraph.graph import StateGraph, MessagesState, START, END
-from langgraph.prebuilt import ToolNode
-from langgraph.types import Command
-from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage, AIMessage
-from langchain_core.tools import tool
-from langchain_aws import ChatBedrock
-from langchain_anthropic import ChatAnthropic
-from botocore.config import Config as BotocoreConfig
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from ag_ui_langgraph import LangGraphAgent, add_langgraph_fastapi_endpoint
-
-# === Pydantic Models ===
+# === Pydantic Models for Tool Arguments ===
 
 class Finding(BaseModel):
     """A key finding from document analysis."""
@@ -103,6 +110,11 @@ class Finding(BaseModel):
     title: str = Field(description="Short title of the finding")
     description: str = Field(description="Detailed description")
     severity: str = Field(description="low, medium, high, or critical")
+
+
+class FindingsList(BaseModel):
+    """List of findings to update in UI."""
+    findings: List[Finding] = Field(description="List of key findings")
 
 
 class RedactedItem(BaseModel):
@@ -113,6 +125,11 @@ class RedactedItem(BaseModel):
     confidence: int = Field(description="Confidence 0-100")
 
 
+class RedactedList(BaseModel):
+    """List of redacted content."""
+    redacted_items: List[RedactedItem] = Field(description="Found redactions")
+
+
 class Tweet(BaseModel):
     """A generated tweet."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -120,18 +137,46 @@ class Tweet(BaseModel):
     posted: bool = Field(default=False)
 
 
+class TweetsList(BaseModel):
+    """List of tweets."""
+    tweets: List[Tweet] = Field(description="Generated tweets")
+
+
+class SummaryContent(BaseModel):
+    """Summary content."""
+    summary: str = Field(description="Executive summary text")
+
+
 # === LangGraph State Definition ===
 
 class FileInvestigatorState(MessagesState):
     """State for the File Investigator agent."""
+    # Findings panel data
     findings: List[Finding]
+    # Redacted content panel data
     redacted: List[RedactedItem]
+    # Tweets panel data
     tweets: List[Tweet]
+    # Summary panel data
     summary: str
+    # Uploaded files from frontend
     uploaded_files: List[dict]
 
 
-# === Tool Definitions ===
+# === Tool Definitions for LangGraph ===
+
+def update_state_from_result(field_name: str, data):
+    """Helper function to create Command that updates state."""
+    return Command(update={
+        field_name: data,
+        "messages": [
+            ToolMessage(
+                content=f"Successfully updated {field_name}",
+                tool_call_id="",  # Will be filled by ToolNode
+            )
+        ]
+    })
+
 
 @tool
 def update_findings(findings_list: dict) -> Command:
@@ -146,6 +191,7 @@ def update_findings(findings_list: dict) -> Command:
     logger = logging.getLogger("agent.frontend")
     findings_data = findings_list.get("findings", []) if isinstance(findings_list, dict) else []
 
+    # Convert to Finding objects
     findings = [
         Finding(
             title=f.get("title", "Untitled"),
@@ -157,12 +203,13 @@ def update_findings(findings_list: dict) -> Command:
 
     logger.info(f"update_findings called with {len(findings)} findings")
 
+    # Return Command to update state
     return Command(update={
         "findings": findings,
         "messages": [
             ToolMessage(
                 content=f"Updated {len(findings)} findings",
-                tool_call_id="",
+                tool_call_id="",  # Will be filled by ToolNode
             )
         ]
     })
@@ -181,6 +228,7 @@ def update_redacted(redacted_list: dict) -> Command:
     logger = logging.getLogger("agent.frontend")
     items_data = redacted_list.get("redacted_items", []) if isinstance(redacted_list, dict) else []
 
+    # Convert to RedactedItem objects
     items = [
         RedactedItem(
             location=item.get("location", "Unknown"),
@@ -216,6 +264,7 @@ def update_tweets(tweets_list: dict) -> Command:
     logger = logging.getLogger("agent.frontend")
     tweets_data = tweets_list.get("tweets", []) if isinstance(tweets_list, dict) else []
 
+    # Convert to Tweet objects
     tweets = [
         Tweet(
             content=t.get("content", ""),
@@ -297,6 +346,7 @@ def create_model():
     model_id = os.getenv("MODEL_ID", "anthropic.claude-haiku-4-5-20251001-v1:0")
 
     if model_id.startswith("openai."):
+        # Using OpenAI compatible model via Bedrock
         boto_config = BotocoreConfig(
             region_name=region,
             connect_timeout=300,
@@ -309,13 +359,16 @@ def create_model():
             boto_config=boto_config,
         )
     elif model_id.startswith("claude-") or "anthropic" in model_id.lower():
+        # Using Anthropic Claude via Bedrock or directly
         if os.getenv("ANTHROPIC_API_KEY"):
+            # Direct Anthropic API
             model = ChatAnthropic(
                 model=model_id,
                 temperature=0.7,
                 max_tokens=4096,
             )
         else:
+            # Via Bedrock
             boto_config = BotocoreConfig(
                 region_name=region,
                 connect_timeout=300,
@@ -329,6 +382,7 @@ def create_model():
                 boto_config=boto_config,
             )
     else:
+        # Default to Bedrock
         boto_config = BotocoreConfig(
             region_name=region,
             connect_timeout=300,
@@ -348,50 +402,40 @@ def create_model():
 # === Prompt Building ===
 
 def build_investigator_prompt(state: FileInvestigatorState, user_message: str) -> str:
-    """Inject files and analysis state into the prompt."""
+    """Inject files and analysis state into the prompt.
+
+    Always extracts text from PDFs - never uses Bedrock document blocks.
+    This avoids Bedrock's 5-document limit which applies across conversation history.
+    """
     logger = logging.getLogger("agent.context")
     context_parts = []
     extracted_texts = []
 
     # Process uploaded files
     uploaded_files = state.get("uploaded_files", [])
-    logger.info(f"📁 收到 {len(uploaded_files)} 个文件")
 
-    for idx, file_info in enumerate(uploaded_files):
+    for file_info in uploaded_files:
         file_name = file_info.get("name", "document.pdf")
         base64_data = file_info.get("base64", "")
-        file_size = len(base64_data) if base64_data else 0
-
-        logger.info(f"📄 [{idx+1}/{len(uploaded_files)}] 文件名: {file_name}, Base64 大小: {file_size} 字节")
 
         if not base64_data:
-            logger.warning(f"⚠️  文件 {file_name} 没有 base64 数据,跳过")
             continue
 
         try:
             pdf_bytes = base64.b64decode(base64_data)
             file_size_mb = len(pdf_bytes) / (1024 * 1024)
-            logger.info(f"📦 解码后 PDF 大小: {file_size_mb:.2f} MB")
+            logger.debug(f"Processing {file_name} ({file_size_mb:.2f} MB)")
 
-            extracted = extract_text_from_pdf(pdf_bytes, file_name)
-            if extracted:
-                text_preview = extracted[:100] if len(extracted) > 100 else extracted
-                logger.info(f"✅ 文本提取成功, 预览: {text_preview}...")
-                logger.info(f"📝 提取的文本长度: {len(extracted)} 字符")
-                extracted_texts.append((file_name, extracted))
-            else:
-                logger.warning(f"⚠️  文件 {file_name} 文本提取失败")
+            extracted = extract_text_from_pdf(pdf_bytes)
+            extracted_texts.append((file_name, extracted))
 
         except Exception as e:
-            logger.error(f"❌ 处理文件 {file_name} 失败: {e}", exc_info=True)
+            logger.error(f"Failed to process {file_name}: {e}", exc_info=True)
             context_parts.append(f"\n**FILE: {file_name}**\n[Error processing file: {str(e)}]\n")
 
     if extracted_texts:
         xml_content = format_extracted_files_as_xml(extracted_texts)
         context_parts.append(f"\n{xml_content}\n")
-        logger.info(f"🎨 已将 {len(extracted_texts)} 个文件格式化为 XML")
-    else:
-        logger.warning("⚠️  没有成功提取任何文件内容")
 
     # Build full prompt
     system_prompt = """You are the File Investigator - a sardonic document analyst with dry humor.
@@ -431,18 +475,24 @@ NOTE: All PDFs are provided as extracted text in XML format.
 
     if context_parts:
         full_prompt = f"{system_prompt}\n\n## DOCUMENTS TO ANALYZE:\n{''.join(context_parts)}\n\n## USER MESSAGE:\n{user_message}"
-        logger.info(f"🎯 最终 prompt 长度: {len(full_prompt)} 字符")
     else:
         full_prompt = f"{system_prompt}\n\n## USER MESSAGE:\n{user_message}"
-        logger.info(f"🎯 最终 prompt 长度: {len(full_prompt)} 字符 (无文件)")
 
     return full_prompt
 
 
 # === LangGraph Nodes ===
 
-def call_model(state: FileInvestigatorState, config) -> Command:
-    """Node that calls the LLM model."""
+def call_model(state: FileInvestigatorState, config: RunnableConfig) -> Command:
+    """Node that calls the LLM model.
+
+    Args:
+        state: Current agent state
+        config: Runtime configuration
+
+    Returns:
+        Command with model response
+    """
     logger = logging.getLogger("agent.model")
 
     # Get user message from last message
@@ -450,24 +500,6 @@ def call_model(state: FileInvestigatorState, config) -> Command:
     user_message = ""
     if messages and isinstance(messages[-1], HumanMessage):
         user_message = messages[-1].content
-
-    logger.info(f"=" * 60)
-    logger.info(f"🤖 开始处理用户消息")
-    logger.info(f"📨 用户消息: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
-
-    # 记录当前状态
-    uploaded_files = state.get("uploaded_files", [])
-    findings = state.get("findings", [])
-    redacted = state.get("redacted", [])
-    tweets = state.get("tweets", [])
-    summary = state.get("summary", "")
-
-    logger.info(f"📊 当前状态:")
-    logger.info(f"  - 文件数: {len(uploaded_files)}")
-    logger.info(f"  - 发现: {len(findings)} 条")
-    logger.info(f"  - 涂黑: {len(redacted)} 条")
-    logger.info(f"  - 推文: {len(tweets)} 条")
-    logger.info(f"  - 摘要: {'有' if summary else '无'}")
 
     # Build prompt with context
     prompt = build_investigator_prompt(state, user_message)
@@ -478,31 +510,24 @@ def call_model(state: FileInvestigatorState, config) -> Command:
     model_with_tools = model.bind_tools(tools)
 
     # Call model
-    logger.info(f"🔄 调用模型...")
-    logger.info(f"=" * 60)
+    logger.info(f"Calling model with {len(messages)} messages")
     response = model_with_tools.invoke([
         SystemMessage(content=prompt),
         *messages
     ])
 
-    logger.info(f"=" * 60)
-    logger.info(f"✅ 模型响应完成")
-
-    # 检查是否有工具调用
-    if hasattr(response, 'tool_calls') and response.tool_calls:
-        logger.info(f"🔧 模型调用了 {len(response.tool_calls)} 个工具:")
-        for i, call in enumerate(response.tool_calls, 1):
-            logger.info(f"  {i}. {call.get('name', 'unknown')}")
-    else:
-        logger.info(f"💬 模型直接回复(无工具调用)")
-
-    logger.info(f"=" * 60)
-
     return {"messages": [response]}
 
 
 def should_continue(state: FileInvestigatorState) -> str:
-    """Determine if we should continue to tools or end."""
+    """Determine if we should continue to tools or end.
+
+    Args:
+        state: Current agent state
+
+    Returns:
+        "tools" if last message has tool calls, "end" otherwise
+    """
     messages = state.get("messages", [])
     if messages:
         last_message = messages[-1]
@@ -514,17 +539,23 @@ def should_continue(state: FileInvestigatorState) -> str:
 # === Graph Construction ===
 
 def create_graph():
-    """Create the LangGraph agent graph."""
-    from langgraph.checkpoint.memory import MemorySaver
+    """Create the LangGraph agent graph.
 
+    Returns:
+        Compiled LangGraph
+    """
+    # Create tool node
     tools = [update_findings, update_redacted, update_tweets, update_summary]
     tool_node = ToolNode(tools)
 
+    # Create state graph
     builder = StateGraph(FileInvestigatorState)
 
+    # Add nodes
     builder.add_node("agent", call_model)
     builder.add_node("tools", tool_node)
 
+    # Add edges
     builder.add_edge(START, "agent")
     builder.add_conditional_edges(
         "agent",
@@ -536,55 +567,84 @@ def create_graph():
     )
     builder.add_edge("tools", "agent")
 
-    # Add checkpointer for state persistence
-    memory = MemorySaver()
-    graph = builder.compile(checkpointer=memory)
+    # Compile graph
+    graph = builder.compile()
 
     return graph
 
 
-# === AG-UI Integration ===
+# === FastAPI Integration ===
 
-# Create FastAPI app
-app = FastAPI(title="File Investigator Agent")
+app = FastAPI(title="File Investigator Agent (LangGraph)")
 
-# === CORS Configuration ===
-# Allow frontend to communicate with backend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://192.168.214.102:3000",
-        "http://47.120.47.251:3002",
-        "http://47.120.47.251:3003",  # 后端自己也可能被访问
-        # 开发环境:允许所有本地访问
-        "http://localhost",
-        "http://192.168.214.102",
-        "http://47.120.47.251",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
-
-# Create the LangGraph
+# Create the graph
 graph = create_graph()
 
-# Create LangGraph Agent
-# Note: AG-UI automatically handles camelCase <-> snake_case conversion
-agent = LangGraphAgent(
-    name="file_investigator",
-    graph=graph,
-    description="AI-powered document analysis agent with dry humor",
-)
 
-# Add AG-UI endpoint to FastAPI app
-add_langgraph_fastapi_endpoint(app, agent, path="/copilotkit")
+@app.post("/invoke")
+async def invoke_agent(request: dict):
+    """Invoke the agent with state and message.
+
+    Expected request format:
+    {
+        "state": {
+            "uploaded_files": [...],
+            "findings": [...],
+            "redacted": [...],
+            "tweets": [...],
+            "summary": "..."
+        },
+        "message": "User message to the agent"
+    }
+    """
+    logger = logging.getLogger("agent.api")
+
+    # Extract state and message from request
+    state_data = request.get("state", {})
+    user_message = request.get("message", "")
+
+    # Build initial state
+    initial_state = FileInvestigatorState(
+        messages=[HumanMessage(content=user_message)],
+        findings=state_data.get("findings", []),
+        redacted=state_data.get("redacted", []),
+        tweets=state_data.get("tweets", []),
+        summary=state_data.get("summary", ""),
+        uploaded_files=state_data.get("uploaded_files", []),
+    )
+
+    logger.info(f"Invoking agent with {len(initial_state['uploaded_files'])} files")
+
+    # Invoke graph
+    try:
+        result = graph.invoke(initial_state)
+
+        # Extract updated state
+        updated_state = {
+            "findings": [f.model_dump() for f in result.get("findings", [])],
+            "redacted": [r.model_dump() for r in result.get("redacted", [])],
+            "tweets": [t.model_dump() for t in result.get("tweets", [])],
+            "summary": result.get("summary", ""),
+        }
+
+        logger.info("Agent invocation successful")
+
+        return StateUpdate(state=updated_state)
+
+    except Exception as e:
+        logger.error(f"Agent invocation failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "framework": "langgraph"}
 
 
 # === Main ===
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run("main_langgraph:app", host="0.0.0.0", port=8000, reload=True)

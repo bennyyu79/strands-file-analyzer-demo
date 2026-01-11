@@ -3,6 +3,7 @@
 import {
   useDefaultTool,
   useCoAgent,
+  useCopilotReadable,
 } from "@copilotkit/react-core";
 import { CopilotChat } from "@copilotkit/react-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -21,6 +22,80 @@ import {
   UploadedFile,
 } from "@/types/investigator";
 
+// 🐛 DEBUG: 全局网络请求拦截器
+if (typeof window !== 'undefined') {
+  const originalFetch = window.fetch;
+  window.fetch = async function(...args) {
+    const [url, options] = args;
+
+    // 拦截发送到 CopilotKit 的请求
+    if (typeof url === 'string' && url.includes('/api/copilotkit')) {
+      const parsedBody = options?.body ? JSON.parse(options.body as string) : null;
+      console.log('🌐 [DEBUG] Fetch Request:', {
+        url,
+        method: options?.method,
+        body: parsedBody,
+        hasFiles: !!parsedBody?.state?.uploadedFiles?.length > 0,
+        uploadedFilesCount: parsedBody?.state?.uploadedFiles?.length || 0,
+        stateKeys: parsedBody?.state ? Object.keys(parsedBody.state) : [],
+        uploadedFilesPreview: parsedBody?.state?.uploadedFiles?.map((f: any) => ({
+          name: f.name,
+          size: f.sizeBytes,
+          base64Length: f.base64?.length || 0
+        })) || []
+      });
+
+      // 🐛 DEBUG: 打印完整的请求体以供分析
+      console.log('📄 [DEBUG] Full Request Body:', JSON.stringify(parsedBody, null, 2));
+    }
+
+    try {
+      const response = await originalFetch(...args);
+
+      // 拦截响应
+      if (typeof url === 'string' && url.includes('/api/copilotkit')) {
+        // 使用 async/await 而不是 .then()
+        const clonedResponse = response.clone();
+        try {
+          const responseData = await clonedResponse.text();
+          console.log('📥 [DEBUG] Fetch Response:', {
+            url,
+            status: response.status,
+            statusText: response.statusText,
+            dataLength: responseData.length,
+            dataType: clonedResponse.headers.get('content-type'),
+            preview: responseData.substring(0, 200)
+          });
+        } catch (e) {
+          console.log('📥 [DEBUG] Fetch Response (parse error):', {
+            url,
+            status: response.status,
+            error: e
+          });
+        }
+      }
+
+      return response;
+    } catch (error) {
+      // 捕获网络错误
+      if (typeof url === 'string' && url.includes('/api/copilotkit')) {
+        console.error('❌ [DEBUG] Fetch Error:', {
+          url,
+          errorString: String(error),
+          errorKeys: Object.keys(error as object),
+          errorMessage: error instanceof Error ? error.message : 'Not an Error',
+          errorStack: error instanceof Error ? error.stack : 'No stack',
+          errorName: error instanceof Error ? error.name : 'Unknown',
+          fullError: JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+        });
+      }
+      throw error;
+    }
+  };
+
+  console.log('✅ [DEBUG] Network interceptor installed');
+}
+
 export default function FileInvestigatorPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -28,27 +103,75 @@ export default function FileInvestigatorPage() {
   const { state, setState } = useCoAgent<FileInvestigatorState>({
     name: "file_investigator",
     initialState: INITIAL_STATE,
+    // 禁用自动加载状态，避免初始化时的空请求导致 400 错误
+    config: {
+      autoLoad: false,
+    },
   });
+
+  // 🔥 FIX: 使用 useCopilotReadable 将状态暴露给 CopilotKit
+  // 这样状态会被包含在发送到后端的 GraphQL 请求中
+  useCopilotReadable({
+    description: "Uploaded PDF files for analysis",
+    value: state.uploadedFiles,
+  });
+
+  // 🐛 DEBUG: 监控 useCopilotReadable 的值变化
+  useEffect(() => {
+    console.log('📝 [DEBUG] useCopilotReadable value updated:', {
+      count: state.uploadedFiles?.length || 0,
+      files: state.uploadedFiles?.map(f => f.name) || [],
+    });
+  }, [state.uploadedFiles]);
 
   // Ref to track current state for use in tool handlers (avoids stale closure)
   const stateRef = useRef(state);
   useEffect(() => {
     stateRef.current = state;
+
+    // 🐛 DEBUG: Log state changes
+    console.log('🔄 [DEBUG] State changed:', {
+      uploadedFiles: state.uploadedFiles?.length || 0,
+      fileNames: state.uploadedFiles?.map(f => ({
+        name: f.name,
+        size: f.sizeBytes,
+        base64Length: f.base64?.length || 0
+      })) || [],
+      analysisStatus: state.analysisStatus,
+      findings: state.findings?.length || 0,
+      redacted: state.redacted?.length || 0,
+      tweets: state.tweets?.length || 0,
+      hasSummary: !!state.summary
+    });
   }, [state]);
 
   // Handle files change
   const handleFilesChange = useCallback(
     (files: UploadedFile[]) => {
-      setState({
+      // 🐛 DEBUG: Log file upload
+      console.log('📤 [DEBUG] Files uploaded:', {
+        count: files.length,
+        files: files.map(f => ({
+          name: f.name,
+          size: f.sizeBytes,
+          base64Length: f.base64?.length || 0,
+          mimeType: f.mimeType
+        }))
+      });
+
+      const newState = {
         ...state,
         uploadedFiles: files,
         analysisStatus: "idle",
         // Reset results when files change
         findings: [],
-        redactedContent: [],
+        redacted: [],
         tweets: [],
         summary: null,
-      });
+      };
+
+      console.log('📤 [DEBUG] Calling setState with new state');
+      setState(newState);
     },
     [state, setState]
   );
@@ -147,7 +270,7 @@ export default function FileInvestigatorPage() {
             {/* Results Grid - fills remaining space, 2 rows split evenly */}
             <div className="grid grid-cols-1 md:grid-cols-2 grid-rows-2 gap-6 flex-1 min-h-0">
               <FindingsPanel findings={state.findings} />
-              <RedactedPanel redactedItems={state.redactedContent} />
+              <RedactedPanel redactedItems={state.redacted} />
               <TweetsPanel
                 tweets={state.tweets}
                 onCopy={handleCopyTweet}
