@@ -773,11 +773,11 @@ def filter_config_for_serialization(config):
                 continue
     return filtered
 
-# Patch the _handle_stream_events method to filter config
+# Patch the _handle_stream_events method to filter config and fix tool call lifecycle
 original_handle_stream_events = agent.__class__._handle_stream_events
 
 async def patched_handle_stream_events(self, input):
-    """Patched version that filters config before streaming."""
+    """Patched version that filters config and fixes tool call lifecycle."""
     logger = logging.getLogger("agent.patch")
 
     # Filter the input to remove non-serializable config
@@ -786,14 +786,64 @@ async def patched_handle_stream_events(self, input):
         input = input.copy(update={"config": filtered_config})
         logger.debug(f"✅ Filtered config for serialization")
 
-    # Call original method
+    # Track if we've sent tool calls
+    tool_calls_sent = []
+    tool_call_ids_completed = set()
+
+    # Call original method and intercept events
     async for event in original_handle_stream_events(self, input):
+        # Parse the event
+        event_str = event if isinstance(event, str) else str(event)
+        try:
+            import json
+            event_data = json.loads(event_str)
+
+            # Track tool call IDs when they're created
+            if "event" in event_data and event_data["event"] == "tool_call_start":
+                tool_call_id = event_data.get("data", {}).get("tool_call_id")
+                if tool_call_id:
+                    tool_calls_sent.append(tool_call_id)
+                    logger.debug(f"🔧 Tracking tool call: {tool_call_id}")
+
+            # Mark tool calls as completed when we see tool_call_end
+            if "event" in event_data and event_data["event"] == "tool_call_end":
+                tool_call_id = event_data.get("data", {}).get("tool_call_id")
+                if tool_call_id:
+                    tool_call_ids_completed.add(tool_call_id)
+                    logger.debug(f"✅ Tool call completed: {tool_call_id}")
+
+            # Before sending RUN_FINISHED, ensure all tool calls are marked as completed
+            if "event" in event_data and event_data["event"] == "run_finished":
+                logger.debug(f"🏁 Run finished. Tool calls: sent={len(tool_calls_sent)}, completed={len(tool_call_ids_completed)}")
+
+                # If there are pending tool calls, inject completion events first
+                if tool_calls_sent and len(tool_call_ids_completed) < len(tool_calls_sent):
+                    logger.warning(f"⚠️ Forcing completion of {len(tool_calls_sent) - len(tool_call_ids_completed)} tool calls")
+
+                    # Inject tool_call_end events for any incomplete tool calls
+                    for tool_call_id in tool_calls_sent:
+                        if tool_call_id not in tool_call_ids_completed:
+                            completion_event = {
+                                "event": "tool_call_end",
+                                "data": {
+                                    "tool_call_id": tool_call_id,
+                                    "result": "Completed (forced)"
+                                }
+                            }
+                            yield json.dumps(completion_event)
+                            logger.debug(f"✅ Forced completion for tool call: {tool_call_id}")
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            # If we can't parse the event, just pass it through
+            logger.debug(f"⚠️ Could not parse event: {e}")
+
+        # Always yield the original event
         yield event
 
 # Bind the patched method
 agent._handle_stream_events = types.MethodType(patched_handle_stream_events, agent)
 
-logger.info("✅ Applied monkey-patch to filter non-serializable config objects")
+logger.info("✅ Applied monkey-patch to filter non-serializable config objects and fix tool call lifecycle")
 
 # Add AG-UI endpoint to FastAPI app
 add_langgraph_fastapi_endpoint(app, agent, path="/copilotkit")
