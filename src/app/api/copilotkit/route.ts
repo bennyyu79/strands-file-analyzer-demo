@@ -4,8 +4,8 @@ import {
   copilotRuntimeNextJSAppRouterEndpoint,
 } from "@copilotkit/runtime";
 
-import { LangGraphHttpAgent } from "@copilotkit/runtime/langgraph";
-
+// import { LangGraphHttpAgent } from "@copilotkit/runtime/langgraph";
+// import { HttpAgent } from "@ag-ui/client";
 import { HttpAgent } from "@ag-ui/client";
 import { NextRequest } from "next/server";
 
@@ -17,7 +17,8 @@ const serviceAdapter = new ExperimentalEmptyAdapter();
 const runtime = new CopilotRuntime({
   agents: {
     // File Investigator agent - CopilotKit + LangGraph + Claude
-    file_investigator: new LangGraphHttpAgent({
+    // Using HttpAgent instead of LangGraphHttpAgent to avoid tool call lifecycle issues
+    file_investigator: new HttpAgent({
       url: process.env.AGENT_URL || "http://localhost:8000/copilotkit",
     }),
   },

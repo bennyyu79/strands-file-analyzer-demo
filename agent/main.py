@@ -651,8 +651,11 @@ def create_graph():
 
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", ToolNode(tools=tools))
+    workflow.add_node("update_state", apply_tool_results)
 
-    workflow.add_edge("tools", "agent")
+    # After tools execute, apply state updates, then go back to agent
+    workflow.add_edge("tools", "update_state")
+    workflow.add_edge("update_state", "agent")
     workflow.set_entry_point("agent")
 
     # Add checkpointer for state persistence
@@ -786,56 +789,64 @@ async def patched_handle_stream_events(self, input):
         input = input.copy(update={"config": filtered_config})
         logger.debug(f"✅ Filtered config for serialization")
 
-    # Track if we've sent tool calls
-    tool_calls_sent = []
-    tool_call_ids_completed = set()
+    # Track tool call IDs from AIMessage events
+    tool_call_ids_from_messages = set()
 
     # Call original method and intercept events
     async for event in original_handle_stream_events(self, input):
-        # Parse the event
-        event_str = event if isinstance(event, str) else str(event)
+        # Try to parse the event - it might be a dict or have different structure
         try:
-            import json
-            event_data = json.loads(event_str)
+            # Handle different event formats
+            if isinstance(event, dict):
+                event_data = event
+            elif hasattr(event, 'model_dump'):
+                event_data = event.model_dump()
+            elif hasattr(event, 'dict'):
+                event_data = event.dict()
+            else:
+                # Try to parse as JSON string
+                import json
+                event_str = str(event)
+                if event_str and event_str != 'None':
+                    event_data = json.loads(event_str)
+                else:
+                    event_data = None
 
-            # Track tool call IDs when they're created
-            if "event" in event_data and event_data["event"] == "tool_call_start":
-                tool_call_id = event_data.get("data", {}).get("tool_call_id")
-                if tool_call_id:
-                    tool_calls_sent.append(tool_call_id)
-                    logger.debug(f"🔧 Tracking tool call: {tool_call_id}")
+            if event_data:
+                # LangChain events use "event" field to indicate type
+                event_type = event_data.get("event", "")
 
-            # Mark tool calls as completed when we see tool_call_end
-            if "event" in event_data and event_data["event"] == "tool_call_end":
-                tool_call_id = event_data.get("data", {}).get("tool_call_id")
-                if tool_call_id:
-                    tool_call_ids_completed.add(tool_call_id)
-                    logger.debug(f"✅ Tool call completed: {tool_call_id}")
+                # Track tool calls from on_chat_model_start events
+                if event_type == "on_chat_model_start":
+                    input_data = event_data.get("data", {}).get("input", {})
+                    if isinstance(input_data, dict):
+                        messages = input_data.get("messages", [])
+                        for msg in messages:
+                            if isinstance(msg, dict):
+                                tool_calls = msg.get("tool_calls", [])
+                                for tc in tool_calls:
+                                    if isinstance(tc, dict):
+                                        tc_id = tc.get("id") or tc.get("tool_call_id")
+                                        if tc_id:
+                                            tool_call_ids_from_messages.add(tc_id)
+                                            logger.debug(f"🔧 Tracking tool call ID: {tc_id}")
 
-            # Before sending RUN_FINISHED, ensure all tool calls are marked as completed
-            if "event" in event_data and event_data["event"] == "run_finished":
-                logger.debug(f"🏁 Run finished. Tool calls: sent={len(tool_calls_sent)}, completed={len(tool_call_ids_completed)}")
+                # Check for on_tool_end events
+                if event_type == "on_tool_end":
+                    # Tool completed - mark as done
+                    pass
 
-                # If there are pending tool calls, inject completion events first
-                if tool_calls_sent and len(tool_call_ids_completed) < len(tool_calls_sent):
-                    logger.warning(f"⚠️ Forcing completion of {len(tool_calls_sent) - len(tool_call_ids_completed)} tool calls")
+                # Check for on_chain_end (run finished)
+                if event_type == "on_chain_end":
+                    logger.debug(f"🏁 Chain finished. Tracked tool calls: {len(tool_call_ids_from_messages)}")
 
-                    # Inject tool_call_end events for any incomplete tool calls
-                    for tool_call_id in tool_calls_sent:
-                        if tool_call_id not in tool_call_ids_completed:
-                            completion_event = {
-                                "event": "tool_call_end",
-                                "data": {
-                                    "tool_call_id": tool_call_id,
-                                    "result": "Completed (forced)"
-                                }
-                            }
-                            yield json.dumps(completion_event)
-                            logger.debug(f"✅ Forced completion for tool call: {tool_call_id}")
+                    # Check if we need to inject tool completion events
+                    if tool_call_ids_from_messages:
+                        logger.info(f"✅ Found {len(tool_call_ids_from_messages)} tool calls in this run")
 
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            # If we can't parse the event, just pass it through
-            logger.debug(f"⚠️ Could not parse event: {e}")
+        except Exception as e:
+            # Silently ignore parsing errors - we don't want to break the stream
+            pass
 
         # Always yield the original event
         yield event
