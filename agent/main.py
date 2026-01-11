@@ -489,11 +489,7 @@ def call_model(state: FileInvestigatorState, config: RunnableConfig) -> Command[
     logger.info(f"  - 推文: {len(tweets)} 条")
     logger.info(f"  - 摘要: {'有' if summary else '无'}")
 
-    # Call model
-    logger.info(f"🔄 调用模型...")
-    logger.info(f"📨 当前消息数量: {len(messages)}")
-
-    # 检查最后一条消息
+    # 检查最后一条消息是否是 ToolMessage
     if messages:
         last_msg = messages[-1]
         msg_type = type(last_msg).__name__
@@ -503,7 +499,21 @@ def call_model(state: FileInvestigatorState, config: RunnableConfig) -> Command[
         # 需要再次调用模型来生成最终回复
         if msg_type == "ToolMessage":
             logger.info(f"🔧 检测到工具执行结果，生成最终回复...")
+            logger.info(f"=" * 60)
 
+            # 创建一个简单的完成消息
+            final_response = AIMessage(
+                content="✅ 文档分析完成！请查看右侧面板的结果。我发现了以下关键信息：\n\n" +
+                         (f"• {len(findings)} 条关键发现\n" if findings else "") +
+                         (f"• {len(redactedContent)} 处涂黑内容\n" if redactedContent else "") +
+                         (f"• {len(tweets)} 条推文草稿\n" if tweets else "") +
+                         (f"• {summary[:100] if summary else ''}...\n" if summary else ""),
+            )
+
+            return Command(goto="__end__", update={"messages": [final_response]})
+
+    logger.info(f"🔄 调用模型...")
+    logger.info(f"📨 当前消息数量: {len(messages)}")
     logger.info(f"=" * 60)
 
     # Build prompt with context

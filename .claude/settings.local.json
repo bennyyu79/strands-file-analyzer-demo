@@ -95,7 +95,10 @@
       "Bash(cat /tmp/claude/-Users-bennyyu-base-work-ido-ML-base-claude-strands-file-analyzer-demo/tasks/b21212d.output)",
       "Bash(cat /tmp/claude/-Users-bennyyu-base-work-ido-ML-base-claude-strands-file-analyzer-demo/tasks/b63bbb3.output)",
       "Bash(ls -la /Users/bennyyu/base/work/ido/ML/base/claude/strands-file-analyzer-demo/agent/.env*)",
-      "Bash(cat /Users/bennyyu/ML/base/claude/with-langgraph-fastapi_macos/agent/pyproject.toml)"
+      "Bash(cat /Users/bennyyu/ML/base/claude/with-langgraph-fastapi_macos/agent/pyproject.toml)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: resolve Config serialization and tool call lifecycle issues\n\n- Changed boto_config to config parameter for ChatBedrock \\(fixes JSON serialization\\)\n- Added RunnableConfig type annotation to call_model function\n- Clean AIMessage without tool metadata in final response\n- Added monkey-patch to filter non-serializable config objects\n- Downgraded ag-ui-langgraph to 0.0.18 to match reference project\n- Added copilotkit==0.1.70a0 dependency\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 3.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push myfork fix/copilotkit-ag-ui-integration)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: avoid model re-invocation after tool execution\n\n- Detect ToolMessage and return completion message directly\n- Prevents model from generating new tool calls after tool execution\n- Ensures final AIMessage has no tool_calls metadata\n- Should resolve \"RUN_FINISHED while tool calls are still active\" error\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 3.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
