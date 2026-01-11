@@ -1,86 +1,127 @@
-# File Investigator
+# 文件调查员 (File Investigator)
 
-AI-powered document analysis demo built with [CopilotKit](https://copilotkit.ai), [Strands Agents](https://strandsagents.com), and Amazon Bedrock.
+基于 AI 的智能文档分析演示项目,集成了 [CopilotKit](https://copilotkit.ai) 和 LangGraph AI Agent,支持 Amazon Bedrock 和 Anthropic Claude。
 
-## About This Project
+## 项目简介
 
-**What This Is:**
-- Educational demo showing how to integrate CopilotKit with Python agents
-- Reference for building TypeScript frontends with Python backends
-- Example of real-time state synchronization between frontend and agent
+**这是什么:**
+- 演示如何将 CopilotKit 前端与 Python AI Agent 后端集成的教育项目
+- TypeScript 前端 + Python 后端的开发参考示例
+- 展示前后端实时状态同步的完整实现
 
-**What This Is NOT:**
-- Production-ready document processing service
-- Secure analysis tool for sensitive documents
-- Replacement for professional legal/compliance review
+**这不是什么:**
+- 生产级文档处理服务
+- 敏感文档的安全分析工具
+- 专业法律/合规审查的替代品
 
-**Use this to:**
-- Learn CopilotKit + Strands integration patterns
-- See how to sync state between React and Python
-- Understand multi-file document processing with AWS Bedrock
+**可以用来:**
+- 学习 CopilotKit + LangGraph 集成模式
+- 了解 React 与 Python 之间的状态同步机制
+- 掌握多文件文档处理的智能策略
+
+**核心优势:**
+- 支持自定义 Anthropic API 配置,灵活选择 AI 模型
+- 智能处理大文件(>4.5MB 自动切换文本提取模式)
+- 实时仪表板更新,可视化分析结果
+- 支持同时分析多达 10 个 PDF 文件
 
 ---
 
 ## Quick Start
 
-### Prerequisites
+### 环境要求
 - Node.js 20+
 - Python 3.12+
-- AWS credentials with Bedrock access
+- AWS Bedrock 访问权限 或 Anthropic API 密钥
 
-### 1. Install dependencies
+### 1. 安装依赖
 
 ```bash
 npm install
 cd agent && uv sync && cd ..
 ```
 
-### 2. Configure AWS credentials
+### 2. 配置 AI 模型
 
-Create `agent/.env`:
+项目支持两种 AI 模型配置方式:
+
+#### 方式一: 使用 Anthropic Claude (推荐)
+
+创建 `agent/.env`:
+
+```bash
+# Anthropic 自定义 API 配置
+ANTHROPIC_BASE_URL=https://your-api-endpoint.com/v1
+ANTHROPIC_AUTH_TOKEN=your-api-key
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+
+# 可选: 默认模型配置
+AWS_REGION=us-west-1
+MODEL_ID=claude-3-5-sonnet-20241022
+```
+
+#### 方式二: 使用 AWS Bedrock
+
+创建 `agent/.env`:
 
 ```bash
 AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
 AWS_REGION=us-west-1
+MODEL_ID=anthropic.claude-haiku-4-5-20251001-v1:0
 ```
 
-### 3. Start development servers
+### 3. 启动开发服务器
 
 ```bash
 npm run dev
 ```
 
-This starts:
-- **Frontend**: http://localhost:3000
-- **Agent**: http://localhost:8000
+这将同时启动:
+- **前端**: http://localhost:3000
+- **AI Agent**: http://localhost:8000
+
+### 4. 访问应用
+
+打开浏览器访问 http://localhost:3000,即可开始使用文件分析功能。
 
 ---
 
-## Key Features
+## 核心功能
 
-**Multi-File PDF Support:**
-- Upload up to 10 PDFs (150MB each)
-- Files ≤4.5MB sent as native PDFs to preserve formatting
-- Files >4.5MB automatically use text extraction
-- Combined analysis across all documents
+### 📄 多文件 PDF 支持
+- 支持上传最多 10 个 PDF 文件(每个最大 150MB)
+- 智能文件处理策略:
+  - ≤4.5MB 的文件: 保持原生 PDF 格式,保留完整排版和图片
+  - >4.5MB 的文件: 自动切换到文本提取模式,突破大小限制
+- 跨文档综合分析,发现文件之间的关联和模式
 
-**Real-Time UI Updates:**
-- Dashboard panels update as agent processes documents
-- Key findings, redacted content speculation, tweet generation
-- Executive summary with markdown formatting
+### 📊 实时仪表板更新
+- **关键发现**: 自动提取文档中的重要信息和洞察
+- **涂黑内容推测**: 识别文档中的涂黑/删减区域,并进行创意推测
+- **推文生成**: 生成适合社交媒体传播的病毒式推文
+- **执行摘要**: 提供文档集合的整体总结和故事线
 
-**Conversational Interface:**
-- Chat with the agent about uploaded documents
-- Tool calls render as custom UI components in the chat
+### 💬 对话式界面
+- 通过聊天界面与 AI Agent 交互
+- 实时查看分析进度和结果
+- 工具调用以自定义 UI 组件形式展示在聊天中
+
+### 🤖 AI 模型灵活性
+- 支持自定义 Anthropic API 配置
+- 兼容 AWS Bedrock 服务
+- 可根据需求切换不同 Claude 模型版本
+- 智能日志过滤,保护敏感数据不被泄露
 
 ---
 
-## How CopilotKit Powers This App
+## 技术架构详解
 
-### `useCoAgent` - State Synchronization
+### CopilotKit 核心功能
 
-Keeps frontend and Python agent in sync automatically:
+#### `useCoAgent` - 状态同步
+
+自动保持前端与 Python Agent 的状态同步:
 
 ```typescript
 const { state, setState } = useCoAgent({
@@ -89,28 +130,28 @@ const { state, setState } = useCoAgent({
 });
 ```
 
-When you upload files on the frontend, they're instantly available to the Python agent. When the agent updates findings, the UI updates immediately.
+当您在前端上传文件时,文件会立即同步到 Python Agent。当 Agent 更新分析结果时,UI 会立即更新。
 
-**Why this matters:** No manual API calls or state management - CopilotKit handles the bidirectional sync via AG-UI Protocol.
+**重要性**: 无需手动 API 调用或状态管理 - CopilotKit 通过 AG-UI 协议自动处理双向同步。
 
-### `CopilotChat` - Conversational UI
+#### `CopilotChat` - 对话界面
 
-Provides the chat interface with built-in tool call rendering:
+提供内置工具调用渲染的聊天界面:
 
 ```typescript
 <CopilotChat
   labels={{
-    title: "File Investigator",
-    initial: "Upload a PDF to begin..."
+    title: "文件调查员",
+    initial: "上传 PDF 开始分析..."
   }}
 />
 ```
 
-**Why this matters:** You get a production-quality chat UI out of the box, with streaming responses and tool call visualization.
+**重要性**: 开箱即用的生产级聊天 UI,支持流式响应和工具调用可视化。
 
-### `useDefaultTool` - Custom Tool UI
+#### `useDefaultTool` - 自定义工具 UI
 
-Renders custom components when the agent calls tools:
+当 Agent 调用工具时渲染自定义组件:
 
 ```typescript
 const defaultTools = [
@@ -121,232 +162,250 @@ const defaultTools = [
 ];
 ```
 
-**Why this matters:** Instead of generic JSON displays, you control exactly how tool outputs appear in the chat.
+**重要性**: 您可以完全控制工具输出在聊天中的展示方式,而不是通用的 JSON 显示。
 
 ---
 
-## How Strands Agents Work Here
+## LangGraph Agent 实现
 
-### What is Strands?
+### 什么是 LangGraph?
 
-[Strands](https://strandsagents.com) is a Python framework for building AI agents. It handles the tool-calling loop, state management, and LLM integration.
+[LangGraph](https://langchain-ai.github.io/langgraph/) 是用于构建复杂 AI Agent 工作流的 Python 框架。它提供了:
+- 状态管理
+- 工具调用循环
+- 与 LLM 的集成
 
-### What is ag_ui_strands?
+### AG-UI Protocol 集成
 
-[ag_ui_strands](https://pypi.org/project/ag-ui-strands/) bridges Strands with CopilotKit. It:
-- Wraps your Strands agent with FastAPI endpoints
-- Emits state updates when tools are called
-- Handles the AG-UI Protocol communication
+本项目使用 `ag_ui_langgraph` 库桥接 LangGraph 与 CopilotKit:
+- 将 LangGraph Agent 包装为 FastAPI 端点
+- 工具调用时自动发送状态更新
+- 处理 AG-UI 协议通信
 
-### Basic Agent Setup
+### Agent 工作流程
 
 ```python
-from strands import Agent
-from ag_ui_strands import StrandsAgent
+# 创建 LangGraph 工作流
+graph = create_graph()  # 包含 agent → tools → agent 循环
 
-# Create your Strands agent
-strands_agent = Agent(
-    system="You are the File Investigator...",
-    model="anthropic/claude-haiku-4-5-20251001"
+# 包装为 AG-UI Agent
+agent = LangGraphAgent(
+    name="file_investigator",
+    graph=graph,
+    description="AI-powered document analysis agent",
 )
 
-# Add tools
-strands_agent.add_tool(update_findings)
-strands_agent.add_tool(update_summary)
-
-# Wrap with ag_ui_strands
-app = StrandsAgent(
-    agent=strands_agent,
-    name="file_investigator",
-    description="AI document analyst"
-).mount(FastAPI())
+# 添加到 FastAPI
+add_langgraph_fastapi_endpoint(app, agent, path="/copilotkit")
 ```
 
-**Why this matters:** You write standard Strands tools in Python, and ag_ui_strands automatically makes them work with CopilotKit's frontend.
+### 状态管理
 
-### Tools Update the UI
-
-When you attach a `state_from_args` callback to a tool, the frontend UI updates automatically:
+Agent 使用统一的 `FileInvestigatorState` 管理状态:
 
 ```python
-def update_findings(findings: dict, context) -> str:
-    """Agent calls this to update findings panel."""
-    return "Updated findings"
-
-# This callback syncs state to frontend
-update_findings.state_from_args = lambda args, context: {
-    **get_current_state(context),
-    "findings": args.get("findings", [])
-}
+class FileInvestigatorState(MessagesState):
+    findings: List[Finding]        # 关键发现
+    redacted: List[RedactedItem]   # 涂黑内容
+    tweets: List[Tweet]           # 推文
+    summary: str                   # 执行摘要
+    uploaded_files: List[dict]     # 上传的文件
 ```
 
-**Why this matters:** One tool call updates both the agent's logic and the user's UI - no separate API calls needed.
+**重要性**: 工具调用会自动更新状态,并通过 AG-UI 协议同步到前端,无需手动 API 调用。
 
 ---
 
-## Multi-File PDF Strategy
+## 多文件 PDF 处理策略
 
-### The Challenge
+### 挑战
 
-AWS Bedrock has limits:
-- 4.5MB per document
-- 5 documents per message
+AWS Bedrock 有严格限制:
+- 每个文档最大 4.5MB
+- 每次请求最多 5 个文档
 
-But users want to upload large files and multiple files together.
+但用户需要上传大文件和多个文件。
 
-### The Solution
+### 解决方案
 
-Intelligent processing based on file size:
+基于文件大小的智能处理:
 
-1. **Small files (≤4.5MB)**: Sent as native PDFs → preserves formatting and images
-2. **Large files (>4.5MB)**: Text extracted via pypdf → enables large file support
-3. **Beyond 5 files**: Additional files use text extraction → respects Bedrock limit
+1. **小文件 (≤4.5MB)**: 以原生 PDF 格式发送 → 保留完整排版和图片
+2. **大文件 (>4.5MB)**: 使用 pypdf 提取文本 → 支持大文件分析
+3. **超过 5 个文件**: 额外文件自动使用文本提取 → 遵守 Bedrock 限制
 
-The agent sees all files and analyzes them together, regardless of how they were processed.
+Agent 统一处理所有文件,无论处理方式如何,都能看到完整内容并进行综合分析。
 
 ---
 
-## Architecture
+## 系统架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Next.js Frontend                         │
+│                     Next.js 前端                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ File Upload │  │  Dashboard  │  │   CopilotKit Chat   │  │
-│  │  (multi)    │  │   Panels    │  │                     │  │
+│  │  文件上传   │  │   仪表板    │  │   CopilotKit 聊天   │  │
+│  │  (多文件)   │  │    面板     │  │                     │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘  │
 │                           │                                  │
-│                    useCoAgent (state sync)                   │
+│                    useCoAgent (状态同步)                     │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ AG-UI Protocol (HTTP + SSE)
+                            │ AG-UI 协议 (HTTP + SSE)
 ┌───────────────────────────┴─────────────────────────────────┐
-│                     Python Agent                             │
+│                     Python AI Agent                          │
 │                                                              │
-│              Strands + ag_ui_strands + FastAPI               │
+│           LangGraph + ag_ui_langgraph + FastAPI              │
 │                           │                                  │
-│         Tools: update_findings, update_redacted,             │
+│         工具: update_findings, update_redacted,              │
 │                update_tweets, update_summary                 │
 │                           │                                  │
-│                    Amazon Bedrock                            │
-│               (Claude Haiku)                                 │
+│              AI 模型 (Claude Haiku / Sonnet)                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow
+### 数据流
 
-1. User uploads PDFs → Frontend state updates via `useCoAgent`
-2. State syncs to Python agent automatically
-3. User sends chat message → "Analyze these documents"
-4. Agent reads PDFs from state, calls Bedrock
-5. Agent calls tools → `update_findings`, `update_tweets`, etc.
-6. Tool callbacks emit state updates
-7. Frontend receives updates → Dashboard panels re-render
+1. 用户上传 PDF → 前端通过 `useCoAgent` 更新状态
+2. 状态自动同步到 Python Agent
+3. 用户发送消息 → "分析这些文档"
+4. Agent 从状态读取 PDF,调用 AI 模型
+5. Agent 调用工具 → `update_findings`, `update_tweets` 等
+6. 工具回调发出状态更新
+7. 前端接收更新 → 仪表板面板重新渲染
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```
-├── src/
+├── src/                          # Next.js 前端源码
 │   ├── app/
-│   │   ├── page.tsx                 # Main page with useCoAgent + CopilotChat
-│   │   ├── layout.tsx               # CopilotKit provider
-│   │   └── api/copilotkit/route.ts  # Runtime configuration
+│   │   ├── page.tsx              # 主页面 (useCoAgent + CopilotChat)
+│   │   ├── layout.tsx            # CopilotKit 提供器
+│   │   └── api/copilotkit/route.ts # 运行时配置
 │   ├── components/
-│   │   ├── dashboard-panels.tsx     # Dashboard UI components
-│   │   ├── file-upload.tsx          # Multi-file upload
-│   │   └── tool-cards.tsx           # Tool UI renderers
+│   │   ├── dashboard-panels.tsx  # 仪表板 UI 组件
+│   │   ├── file-upload.tsx       # 多文件上传组件
+│   │   └── tool-cards.tsx        # 工具 UI 渲染器
 │   └── types/
-│       └── investigator.ts          # TypeScript interfaces
-├── agent/
-│   ├── main.py                      # Strands agent + ag_ui_strands
-│   ├── pdf_utils.py                 # PDF text extraction
-│   └── pyproject.toml               # Python dependencies
-└── package.json
+│       └── investigator.ts       # TypeScript 接口定义
+├── agent/                        # Python AI Agent
+│   ├── main.py                   # LangGraph Agent + AG-UI 集成
+│   ├── pdf_utils.py              # PDF 文本提取工具
+│   └── pyproject.toml            # Python 依赖配置
+├── scripts/                      # 启动脚本
+├── public/                       # 静态资源
+└── package.json                  # Node.js 依赖配置
 ```
 
 ---
 
-## Environment Variables
+## 环境变量配置
 
-### Agent (`agent/.env`)
+### AI Agent 配置 (`agent/.env`)
 
-| Variable | Description |
-|----------|-------------|
-| `AWS_ACCESS_KEY_ID` | AWS access key for Bedrock |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
-| `AWS_REGION` | AWS region (default: `us-west-1`) |
+#### Anthropic Claude 配置 (推荐)
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `ANTHROPIC_BASE_URL` | 自定义 API 端点 | - |
+| `ANTHROPIC_AUTH_TOKEN` | API 密钥 | - |
+| `ANTHROPIC_MODEL` | 模型名称 | `claude-3-5-sonnet-20241022` |
 
-### Frontend (optional)
+#### AWS Bedrock 配置
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `AWS_ACCESS_KEY_ID` | AWS 访问密钥 | - |
+| `AWS_SECRET_ACCESS_KEY` | AWS 密钥 | - |
+| `AWS_REGION` | AWS 区域 | `us-west-1` |
+| `MODEL_ID` | Bedrock 模型 ID | `anthropic.claude-haiku-4-5-20251001-v1:0` |
 
-| Variable | Description |
-|----------|-------------|
-| `AGENT_URL` | Agent URL (default: `http://localhost:8000`) |
-
----
-
-## Tech Stack
-
-**Frontend:**
-- Next.js 16
-- React 19
-- CopilotKit 1.10
-- Tailwind CSS 4
-
-**Backend:**
-- Python 3.12
-- Strands Agents 1.15+
-- ag_ui_strands 0.1.0b12
-- FastAPI + Uvicorn
-- pypdf 4.0+
-- Amazon Bedrock (Claude Haiku)
+### 前端配置 (可选)
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `AGENT_URL` | Agent 服务地址 | `http://localhost:8000` |
 
 ---
 
-## Commands
+## 技术栈
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start both frontend and agent |
-| `npm run dev:ui` | Start frontend only |
-| `npm run dev:agent` | Start agent only |
-| `npm run build` | Build for production |
-| `npm run lint` | Run ESLint |
+**前端技术:**
+- Next.js 16 - React 框架
+- React 19 - UI 库
+- CopilotKit 1.10 - AI 对话界面
+- Tailwind CSS 4 - 样式框架
 
----
+**后端技术:**
+- Python 3.12 - 编程语言
+- LangGraph 0.2.74+ - AI Agent 框架
+- AG-UI Protocol 0.1.5+ - 前后端通信协议
+- FastAPI + Uvicorn - Web 服务
+- pypdf 4.0+ - PDF 文本提取
 
-## Troubleshooting
-
-**Agent not connecting:**
-- Verify agent is running on port 8000
-- Check AWS credentials in `agent/.env`
-- Ensure Bedrock model access is enabled
-
-**PDF not processing:**
-- Large PDFs (>4.5MB) automatically use text extraction
-- Check agent logs for errors
-- Verify PDF is not corrupted or encrypted
-
-**State not syncing:**
-- Ensure both servers are running
-- Check browser console for errors
-- Verify agent name matches in both frontend and backend
+**AI 模型:**
+- Anthropic Claude (Sonnet/Haiku) - 主力模型
+- AWS Bedrock - 备选模型服务
 
 ---
 
-## Learning Resources
+## 常用命令
 
-**CopilotKit:**
-- [CopilotKit Docs](https://docs.copilotkit.ai)
-- [useCoAgent Hook](https://docs.copilotkit.ai/reference/hooks/useCoAgent)
-- [AG-UI Protocol](https://docs.copilotkit.ai/coagents/ag-ui-protocol)
+| 命令 | 说明 |
+|------|------|
+| `npm run dev` | 同时启动前端和 Agent |
+| `npm run dev:ui` | 仅启动前端 |
+| `npm run dev:agent` | 仅启动 Agent |
+| `npm run build` | 构建生产版本 |
+| `npm run lint` | 运行 ESLint 代码检查 |
+| `cd agent && uv run main.py` | 手动启动 Agent 服务 |
 
-**Strands Agents:**
-- [Strands Documentation](https://strandsagents.com)
-- [ag_ui_strands Package](https://pypi.org/project/ag-ui-strands/)
+---
 
-**AWS Bedrock:**
-- [Bedrock API Reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/welcome.html)
+## 故障排查
+
+### Agent 连接失败
+- 确认 Agent 服务运行在 8000 端口
+- 检查 `agent/.env` 中的 API 配置是否正确
+- 确认 AWS Bedrock 模型访问已启用或 Anthropic API 有效
+- 查看 Agent 日志: `cd agent && uv run main.py`
+
+### PDF 处理失败
+- 大文件 (>4.5MB) 会自动切换到文本提取模式
+- 检查 Agent 日志中的错误信息
+- 确认 PDF 未损坏或加密
+- 尝试减小文件大小或转换为标准 PDF 格式
+
+### 状态同步问题
+- 确认前后端服务都在运行
+- 检查浏览器控制台错误信息
+- 验证前后端的 Agent 名称一致 (`file_investigator`)
+- 检查 CORS 配置是否包含前端地址
+
+### 模型响应问题
+- 如果使用自定义 Anthropic API,确认端点和密钥正确
+- 检查网络连接和 API 配额
+- 查看 Agent 日志中的模型调用错误
+- 尝试切换到不同的模型版本
+
+---
+
+## 学习资源
+
+### CopilotKit
+- [官方文档](https://docs.copilotkit.ai)
+- [useCoAgent 钩子](https://docs.copilotkit.ai/reference/hooks/useCoAgent)
+- [AG-UI 协议](https://docs.copilotkit.ai/coagents/ag-ui-protocol)
+
+### LangGraph
+- [官方文档](https://langchain-ai.github.io/langgraph/)
+- [快速入门](https://langchain-ai.github.io/langgraph/tutorials/)
+
+### Anthropic Claude
+- [Claude 模型介绍](https://www.anthropic.com/claude)
+- [API 文档](https://docs.anthropic.com/en/api/getting-started)
+
+### AWS Bedrock
+- [服务介绍](https://aws.amazon.com/bedrock/)
+- [API 参考](https://docs.aws.amazon.com/bedrock/latest/APIReference/)
 
 ---
 

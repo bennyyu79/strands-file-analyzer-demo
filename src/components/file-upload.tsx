@@ -60,7 +60,7 @@ export function FileUpload({ onFilesChange, currentFiles }: FileUploadProps) {
         }
 
         // Check duplicates
-        if (currentFiles.some((f) => f.name === file.name)) {
+        if (currentFiles && currentFiles.some((f) => f.name === file.name)) {
           continue; // Skip silently
         }
 
@@ -79,7 +79,7 @@ export function FileUpload({ onFilesChange, currentFiles }: FileUploadProps) {
       }
 
       // Enforce max files limit
-      const combined = [...currentFiles, ...newFiles].slice(0, MAX_FILES);
+      const combined = [...(currentFiles || []), ...newFiles].slice(0, MAX_FILES);
       onFilesChange(combined);
       setIsLoading(false);
     },
@@ -114,7 +114,7 @@ export function FileUpload({ onFilesChange, currentFiles }: FileUploadProps) {
   };
 
   // Show file list when files exist
-  if (currentFiles.length > 0) {
+  if (currentFiles && currentFiles.length > 0) {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
         <div className="flex items-center justify-between mb-3">

@@ -34,11 +34,18 @@ export default function FileInvestigatorPage() {
   const stateRef = useRef(state);
   useEffect(() => {
     stateRef.current = state;
+    console.log("🔄 状态更新:", {
+      uploadedFiles: state.uploadedFiles?.length || 0,
+      status: state.analysisStatus,
+      findings: state.findings?.length || 0
+    });
   }, [state]);
 
   // Handle files change
   const handleFilesChange = useCallback(
     (files: UploadedFile[]) => {
+      console.log("📁 文件更新:", files.length, "个文件");
+      console.log("📄 文件列表:", files.map(f => f.name));
       setState({
         ...state,
         uploadedFiles: files,
@@ -140,7 +147,7 @@ export default function FileInvestigatorPage() {
             <div className="flex-shrink-0 mb-6">
               <FileUpload
                 onFilesChange={handleFilesChange}
-                currentFiles={state.uploadedFiles}
+                currentFiles={state.uploadedFiles || []}
               />
             </div>
 

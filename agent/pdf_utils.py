@@ -39,28 +39,36 @@ def extract_text_from_pdf(pdf_bytes: bytes, filename: str) -> Optional[str]:
         return None
 
 
-def format_extracted_files_as_xml(files: list[dict]) -> str:
+def format_extracted_files_as_xml(files: list) -> str:
     """Format multiple extracted file contents as XML.
 
     Args:
-        files: List of {"name": str, "content": str} dicts
+        files: List of {"name": str, "content": str} dicts or (filename, content) tuples
 
     Returns:
         XML-formatted string
     """
     parts = ["<documents>"]
-    for f in files:
+    for file in files:
+        # Support both dict and tuple formats
+        if isinstance(file, dict):
+            file_name = file.get("name", "unknown")
+            content = file.get("content", "")
+        else:
+            # Assume tuple format (filename, content)
+            file_name, content = file
+
         # Escape XML special chars in content
-        content = (
-            f["content"]
+        escaped_content = (
+            content
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         )
         # Escape quotes in filename for XML attribute
-        safe_name = f["name"].replace('"', "&quot;")
+        safe_name = file_name.replace('"', "&quot;")
         parts.append(f'<file name="{safe_name}">')
-        parts.append(f"<content>{content}</content>")
+        parts.append(f"<content>{escaped_content}</content>")
         parts.append("</file>")
     parts.append("</documents>")
     return "\n".join(parts)

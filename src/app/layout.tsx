@@ -15,7 +15,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={"antialiased"}>
         <CopilotKit runtimeUrl="/api/copilotkit" agent="file_investigator">
           {children}
