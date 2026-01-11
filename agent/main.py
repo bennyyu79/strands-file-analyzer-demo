@@ -9,7 +9,7 @@ from typing import List, Literal
 from dotenv import load_dotenv
 from pdf_utils import extract_text_from_pdf, format_extracted_files_as_xml
 from pydantic import BaseModel, Field
-from copilotkit import LangGraphAGUIAgent
+from copilotkit import LangGraphAGUIAgent, CopilotKitState
 
 load_dotenv()
 
@@ -61,7 +61,7 @@ class Tweet(BaseModel):
 
 # === LangGraph State Definition ===
 
-class FileInvestigatorState(MessagesState):
+class FileInvestigatorState(CopilotKitState):
     """State for the File Investigator agent."""
     findings: List[Finding]
     redactedContent: List[RedactedItem]
@@ -107,11 +107,30 @@ def update_redacted(redacted_list: dict) -> str:
         Success message
     """
     items_data = redacted_list.get("redacted_items", []) if isinstance(redacted_list, dict) else []
+
+    def parse_confidence(conf_value):
+        """Parse confidence from various formats: '100%', 'high', 80, etc."""
+        if isinstance(conf_value, int):
+            return conf_value
+        if isinstance(conf_value, str):
+            # Handle text descriptions
+            conf_lower = conf_value.lower()
+            if conf_lower in ["high", "very high"]:
+                return 80
+            elif conf_lower in ["medium", "moderate"]:
+                return 50
+            elif conf_lower in ["low", "very low"]:
+                return 20
+            # Handle numeric strings with possible % sign
+            numeric_part = ''.join(c for c in conf_value if c.isdigit())
+            return int(numeric_part) if numeric_part.isdigit() else 50
+        return 50  # Default fallback
+
     items = [
         RedactedItem(
             location=item.get("location", "Unknown"),
             speculation=item.get("speculation", ""),
-            confidence=item.get("confidence", 50)
+            confidence=parse_confidence(item.get("confidence", 50))
         )
         for item in items_data
     ]
@@ -301,14 +320,16 @@ def call_model(state: FileInvestigatorState, config: RunnableConfig) -> Command[
 
     logger.info(f"Processing message: {user_message[:100]}")
 
-    # Check if last message is ToolMessage (tools just executed)
-    if messages and type(messages[-1]).__name__ == "ToolMessage":
-        logger.info("Tools executed, generating final response")
+    # Check if all tools have been executed (all state fields populated)
+    findings = state.get("findings", [])
+    redactedContent = state.get("redactedContent", [])
+    tweets = state.get("tweets", [])
+    summary = state.get("summary", "")
 
-        findings = state.get("findings", [])
-        redactedContent = state.get("redactedContent", [])
-        tweets = state.get("tweets", [])
-        summary = state.get("summary", "")
+    # If all 4 tools have been called and we have a ToolMessage, generate final response
+    if (messages and type(messages[-1]).__name__ == "ToolMessage" and
+        findings and redactedContent and tweets and summary):
+        logger.info("All tools executed, generating final response")
 
         final_response = AIMessage(
             content="✅ 文档分析完成！请查看右侧面板的结果。我发现了以下关键信息：\n\n" +
@@ -366,41 +387,45 @@ def tools_router(state: FileInvestigatorState) -> Command:
                             import json
                             try:
                                 if tool_name == "update_findings":
-                                    if not content or not isinstance(content, str):
-                                        logger.warning(f"Empty or invalid content for {tool_name}")
+                                    # Handle empty content, whitespace, empty arrays
+                                    if not content or not isinstance(content, str) or content.strip() == "" or content == "[]":
+                                        logger.info(f"No data for {tool_name}, setting empty array")
                                         updates["findings"] = []
                                     else:
-                                        findings_data = json.loads(content) if content else []
-                                        updates["findings"] = [Finding(**f) for f in findings_data] if findings_data else []
+                                        try:
+                                            findings_data = json.loads(content)
+                                            updates["findings"] = [Finding(**f) for f in findings_data] if findings_data else []
+                                        except json.JSONDecodeError as e:
+                                            logger.error(f"JSON parsing error for {tool_name}: {e}, content: '{content[:100]}'")
+                                            updates["findings"] = []
                                 elif tool_name == "update_redacted":
-                                    if not content or not isinstance(content, str):
-                                        logger.warning(f"Empty or invalid content for {tool_name}")
+                                    # Handle empty content, whitespace, empty arrays
+                                    if not content or not isinstance(content, str) or content.strip() == "" or content == "[]":
+                                        logger.info(f"No data for {tool_name}, setting empty array")
                                         updates["redactedContent"] = []
                                     else:
-                                        redacted_data = json.loads(content) if content else []
-                                        updates["redactedContent"] = [RedactedItem(**r) for r in redacted_data] if redacted_data else []
+                                        try:
+                                            redacted_data = json.loads(content)
+                                            updates["redactedContent"] = [RedactedItem(**r) for r in redacted_data] if redacted_data else []
+                                        except json.JSONDecodeError as e:
+                                            logger.error(f"JSON parsing error for {tool_name}: {e}, content: '{content[:100]}'")
+                                            updates["redactedContent"] = []
                                 elif tool_name == "update_tweets":
-                                    if not content or not isinstance(content, str):
-                                        logger.warning(f"Empty or invalid content for {tool_name}")
+                                    # Handle empty content, whitespace, empty arrays
+                                    if not content or not isinstance(content, str) or content.strip() == "" or content == "[]":
+                                        logger.info(f"No data for {tool_name}, setting empty array")
                                         updates["tweets"] = []
                                     else:
-                                        tweets_data = json.loads(content) if content else []
-                                        updates["tweets"] = [Tweet(**t) for t in tweets_data] if tweets_data else []
+                                        try:
+                                            tweets_data = json.loads(content)
+                                            updates["tweets"] = [Tweet(**t) for t in tweets_data] if tweets_data else []
+                                        except json.JSONDecodeError as e:
+                                            logger.error(f"JSON parsing error for {tool_name}: {e}, content: '{content[:100]}'")
+                                            updates["tweets"] = []
                                 elif tool_name == "update_summary":
-                                    updates["summary"] = content if content else ""
-                            except json.JSONDecodeError as e:
-                                logger.error(f"JSON parsing error for {tool_name}: {e}")
-                                # Set empty values on JSON error
-                                if tool_name == "update_findings":
-                                    updates["findings"] = []
-                                elif tool_name == "update_redacted":
-                                    updates["redactedContent"] = []
-                                elif tool_name == "update_tweets":
-                                    updates["tweets"] = []
-                                elif tool_name == "update_summary":
-                                    updates["summary"] = ""
+                                    updates["summary"] = content if isinstance(content, str) else ""
                             except Exception as e:
-                                logger.error(f"Error parsing {tool_name} result: {e}")
+                                logger.error(f"Unexpected error processing {tool_name}: {e}")
 
     logger.info(f"State updates: {list(updates.keys())}")
     return Command(goto="agent", update=updates)
@@ -423,6 +448,7 @@ def create_graph():
 
     # Agent -> Tools -> Router -> Agent (loop back)
     workflow.add_edge("tools", "tools_router")
+    workflow.add_edge("tools_router", "agent")  # Loop back to allow multiple tool calls
     workflow.set_entry_point("agent")
 
     # Add checkpointer for state persistence

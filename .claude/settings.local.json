@@ -101,7 +101,10 @@
       "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: avoid model re-invocation after tool execution\n\n- Detect ToolMessage and return completion message directly\n- Prevents model from generating new tool calls after tool execution\n- Ensures final AIMessage has no tool_calls metadata\n- Should resolve \"RUN_FINISHED while tool calls are still active\" error\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 3.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: inject tool_call_end events to fix lifecycle tracking\n\n- Track all tool call IDs in the event stream\n- Detect tool_call_end events to mark completions\n- Before run_finished, inject missing tool_call_end events\n- Forces CopilotKit Runtime to recognize tool calls as completed\n- Should resolve \"RUN_FINISHED while tool calls are still active\" error\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 3.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: add update_state node to sync tool results to LangGraph state\n\n- Inserted update_state node after tools execution\n- Applies pending findings, redacted content, tweets, summary to state\n- State changes sync to frontend via useCoAgent\n- Ensures tool results are properly propagated\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 3.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(rm -f agent/agent.log agent/debug_state.py agent/diagnose_imports.py agent/main.py.strands.backup agent/pyproject.toml.backup)"
+      "Bash(rm -f agent/agent.log agent/debug_state.py agent/diagnose_imports.py agent/main.py.strands.backup agent/pyproject.toml.backup)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+      "Bash(.venv/bin/python -c \"from copilotkit import CopilotKitState; print\\(''CopilotKitState imported successfully''\\)\")"
     ]
   }
 }

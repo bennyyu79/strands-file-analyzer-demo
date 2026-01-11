@@ -14,7 +14,7 @@ import {
   TweetsPanel,
   SummaryPanel,
 } from "@/components/dashboard-panels";
-import { DefaultToolCard } from "@/components/tool-cards";
+import { DefaultToolCard, AnalysisProgressCard } from "@/components/tool-cards";
 import {
   FileInvestigatorState,
   INITIAL_STATE,
@@ -23,6 +23,20 @@ import {
 
 export default function FileInvestigatorPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Track all tool states (simplified to 2 states: running/complete)
+  const [toolStates, setToolStates] = useState<Record<string, {
+    status: "running" | "complete";
+    args?: Record<string, unknown>;
+    result?: unknown;
+  }>>({});
+
+  // Ref to track tool calls (safe to update in render)
+  const toolCallsRef = useRef<Record<string, {
+    status: "running" | "complete";
+    args?: Record<string, unknown>;
+    result?: unknown;
+  }>>({});
 
   // Shared state with agent
   const { state, setState } = useCoAgent<FileInvestigatorState>({
@@ -50,6 +64,7 @@ export default function FileInvestigatorPage() {
     (files: UploadedFile[]) => {
       console.log("📁 Files changed:", files.length, "files");
       console.log("📄 File names:", files.map(f => f.name));
+      setToolStates({}); // Clear previous tool states
       setState({
         ...state,
         uploadedFiles: files,
@@ -98,17 +113,41 @@ export default function FileInvestigatorPage() {
     [setState]
   );
 
-  // Default Tool Renderer
+  // Clear tool ref when files change
+  useEffect(() => {
+    if (state.uploadedFiles?.length === 0) {
+      toolCallsRef.current = {};
+      setToolStates({});
+    }
+  }, [state.uploadedFiles]);
+
+  // Default Tool Renderer - Track all tools for Analysis Progress section
   useDefaultTool({
-    render: (props) => (
-      <DefaultToolCard
-        name={props.name}
-        status={props.status}
-        args={props.args}
-        result={props.result}
-      />
-    ),
+    render: (props) => {
+      // Map CopilotKit status to simpler 2-state system (running/complete)
+      const simpleStatus = props.status === "complete" ? "complete" : "running";
+
+      // Store in ref during render (safe, doesn't cause re-render)
+      toolCallsRef.current[props.name] = {
+        status: simpleStatus,
+        args: props.args,
+        result: props.result
+      };
+
+      // Return null to hide from chat - all tools shown in Analysis Progress section
+      return null;
+    },
   });
+
+  // Sync tool ref to state periodically (outside of render)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      // Always sync to ensure all tools are shown
+      setToolStates({...toolCallsRef.current});
+    }, 100); // Check every 100ms
+
+    return () => clearInterval(timer);
+  }, []); // No dependencies - we want this to run continuously
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -168,14 +207,32 @@ export default function FileInvestigatorPage() {
 
           {/* Right Column: Chat */}
           <div className="lg:col-span-1">
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-[calc(100vh-180px)] overflow-hidden">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-[calc(100vh-180px)] overflow-hidden flex flex-col">
+              {/* Tool Progress Section */}
+              {Object.keys(toolStates).length > 0 && (
+                <div className="p-4 border-b border-slate-200 bg-slate-50">
+                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+                    Analysis Progress
+                  </h3>
+                  <div className="space-y-2">
+                    {Object.entries(toolStates).map(([name, data]) => (
+                      <AnalysisProgressCard
+                        key={name}
+                        toolName={name}
+                        status={data.status}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <CopilotChat
                 labels={{
                   title: "Investigation Assistant",
                   initial: "Upload a PDF and I'll help you investigate it. Some documents have more... interesting... contents than others.",
                   placeholder: "Ask me to analyze the document...",
                 }}
-                className="h-full"
+                className="flex-1"
               />
             </div>
           </div>
