@@ -6,13 +6,15 @@ import logging
 import os
 import re
 import uuid
-from typing import List, Optional, Annotated
+from typing import List, Optional, Annotated, Literal
 
 from dotenv import load_dotenv
 from pdf_utils import extract_text_from_pdf, format_extracted_files_as_xml
 from pydantic import BaseModel, Field
 
+#from copilotkit import LangGraphAGUIAgent
 from ag_ui_langgraph import LangGraphAgent, add_langgraph_fastapi_endpoint
+from copilotkit import LangGraphAGUIAgent
 
 #from copilotkit.integrations.fastapi import add_fastapi_endpoint
 #from copilotkit import CopilotKitRemoteEndpoint, LangGraphAgent
@@ -93,6 +95,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import Command
 from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage, AIMessage
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 from langchain_aws import ChatBedrock
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
@@ -314,16 +317,15 @@ def create_model():
     model_id = os.getenv("MODEL_ID", "anthropic.claude-haiku-4-5-20251001-v1:0")
 
     if model_id.startswith("openai."):
-        boto_config = BotocoreConfig(
-            region_name=region,
-            connect_timeout=300,
-            read_timeout=300,
-        )
         model = ChatBedrock(
             model_id=model_id,
             region_name=region,
             model_kwargs={"temperature": 0.7},
-            boto_config=boto_config,
+            config=BotocoreConfig(
+                region_name=region,
+                connect_timeout=300,
+                read_timeout=300,
+            ),
         )
     elif model_id.startswith("claude-") or "anthropic" in model_id.lower():
         if os.getenv("ANTHROPIC_API_KEY"):
@@ -333,30 +335,28 @@ def create_model():
                 max_tokens=4096,
             )
         else:
-            boto_config = BotocoreConfig(
-                region_name=region,
-                connect_timeout=300,
-                read_timeout=300,
-            )
             model = ChatBedrock(
                 model_id=model_id,
                 region_name=region,
                 temperature=0.7,
                 max_tokens=4096,
-                boto_config=boto_config,
+                config=BotocoreConfig(
+                    region_name=region,
+                    connect_timeout=300,
+                    read_timeout=300,
+                ),
             )
     else:
-        boto_config = BotocoreConfig(
-            region_name=region,
-            connect_timeout=300,
-            read_timeout=300,
-        )
         model = ChatBedrock(
             model_id=model_id,
             region_name=region,
             temperature=0.7,
             max_tokens=4096,
-            boto_config=boto_config,
+            config=BotocoreConfig(
+                region_name=region,
+                connect_timeout=300,
+                read_timeout=300,
+            ),
         )
 
     return model
@@ -461,7 +461,7 @@ NOTE: All PDFs are provided as extracted text in XML format.
 
 # === LangGraph Nodes ===
 
-def call_model(state: FileInvestigatorState, config) -> Command:
+def call_model(state: FileInvestigatorState, config: RunnableConfig) -> Command[Literal["tools", "__end__"]]:
     """Node that calls the LLM model."""
     logger = logging.getLogger("agent.model")
 
@@ -489,14 +489,6 @@ def call_model(state: FileInvestigatorState, config) -> Command:
     logger.info(f"  - 推文: {len(tweets)} 条")
     logger.info(f"  - 摘要: {'有' if summary else '无'}")
 
-    # Build prompt with context
-    prompt = build_investigator_prompt(state, user_message)
-
-    # Create model with tools
-    model = create_model()
-    tools = [update_findings, update_redacted, update_tweets, update_summary]
-    model_with_tools = model.bind_tools(tools)
-
     # Call model
     logger.info(f"🔄 调用模型...")
     logger.info(f"📨 当前消息数量: {len(messages)}")
@@ -507,10 +499,23 @@ def call_model(state: FileInvestigatorState, config) -> Command:
         msg_type = type(last_msg).__name__
         logger.info(f"📄 最后一条消息类型: {msg_type}")
 
+        # 如果最后一条消息是 ToolMessage，说明工具刚执行完
+        # 需要再次调用模型来生成最终回复
         if msg_type == "ToolMessage":
-            logger.info(f"🔧 检测到工具执行结果")
+            logger.info(f"🔧 检测到工具执行结果，生成最终回复...")
 
     logger.info(f"=" * 60)
+
+    # Build prompt with context
+    prompt = build_investigator_prompt(state, user_message)
+
+    # Create model with tools
+    model = create_model()
+    tools = [update_findings, update_redacted, update_tweets, update_summary]
+    model_with_tools = model.bind_tools(tools)
+
+    # Invoke model without passing config to avoid serialization issues
+    # The config parameter contains non-serializable objects like BotocoreConfig
     response = model_with_tools.invoke([
         SystemMessage(content=prompt),
         *messages
@@ -519,36 +524,27 @@ def call_model(state: FileInvestigatorState, config) -> Command:
     logger.info(f"=" * 60)
     logger.info(f"✅ 模型响应完成")
 
-    # 检查是否有工具调用
-    if hasattr(response, 'tool_calls') and response.tool_calls:
-        logger.info(f"🔧 模型调用了 {len(response.tool_calls)} 个工具:")
-        for i, call in enumerate(response.tool_calls, 1):
+    # Check for tool calls
+    tool_calls = response.tool_calls
+    if tool_calls:
+        logger.info(f"🔧 模型调用了 {len(tool_calls)} 个工具:")
+        for i, call in enumerate(tool_calls, 1):
             logger.info(f"  {i}. {call.get('name', 'unknown')}")
-        # Return response with tool calls - will route to tools node
-        return {
-            "messages": [response],
-            # Preserve these fields to prevent them from being reset
-            "uploadedFiles": state.get("uploadedFiles", []),
-            "findings": state.get("findings", []),
-            "redactedContent": state.get("redactedContent", []),
-            "tweets": state.get("tweets", []),
-            "summary": state.get("summary", ""),
-        }
-    else:
-        logger.info(f"💬 模型直接回复(无工具调用)")
-        logger.info(f"=" * 60)
-        # No tool calls - this is the final response, end the run
-        return Command(
-            update={
-                "messages": [response],
-                # Preserve these fields to prevent them from being reset
-                "uploadedFiles": state.get("uploadedFiles", []),
-                "findings": state.get("findings", []),
-                "redactedContent": state.get("redactedContent", []),
-                "tweets": state.get("tweets", []),
-                "summary": state.get("summary", ""),
-            }
-        )
+        # Route to tools node with the response
+        return Command(goto="tools", update={"messages": [response]})
+
+    # No tool calls - end the graph
+    logger.info(f"💬 模型直接回复(无工具调用)")
+    logger.info(f"=" * 60)
+
+    # IMPORTANT: When there are no tool calls, strip any tool-related metadata
+    # from the response to prevent CopilotKit from thinking tools are still active
+    clean_response = AIMessage(
+        content=response.content,
+        id=response.id,
+    )
+
+    return Command(goto="__end__", update={"messages": [clean_response]})
 
 
 def apply_tool_results(state: FileInvestigatorState) -> Command:
@@ -639,64 +635,19 @@ def create_graph():
     from langgraph.checkpoint.memory import MemorySaver
 
     tools = [update_findings, update_redacted, update_tweets, update_summary]
-    tool_node = ToolNode(tools)
 
-    # Create a wrapper function that applies state updates after tool execution
-    def tools_with_state_updates(state):
-        """Execute tools and apply state updates."""
-        # First, execute the tools using standard ToolNode logic
-        result = tool_node.invoke(state)
+    # Create workflow graph following the reference pattern
+    workflow = StateGraph(FileInvestigatorState)
 
-        # Then apply any pending state updates
-        global _pending_findings, _pending_redacted, _pending_tweets, _pending_summary
+    workflow.add_node("agent", call_model)
+    workflow.add_node("tools", ToolNode(tools=tools))
 
-        updates = {}
-        if _pending_findings:
-            updates["findings"] = _pending_findings
-            _pending_findings = []
-        if _pending_redacted:
-            updates["redactedContent"] = _pending_redacted
-            _pending_redacted = []
-        if _pending_tweets:
-            updates["tweets"] = _pending_tweets
-            _pending_tweets = []
-        if _pending_summary:
-            updates["summary"] = _pending_summary
-            _pending_summary = ""
-
-        # Merge the tool node result with our state updates
-        if updates:
-            result = {**result, **updates}
-
-        return result
-
-    builder = StateGraph(FileInvestigatorState)
-
-    builder.add_node("agent", call_model)
-    builder.add_node("tools", tools_with_state_updates)
-
-    builder.add_edge(START, "agent")
-    builder.add_conditional_edges(
-        "agent",
-        should_continue,
-        {
-            "tools": "tools",
-            "__end__": END,
-        }
-    )
-    # After tools execute, check if we should end or continue
-    builder.add_conditional_edges(
-        "tools",
-        lambda state: "agent" if state.get("messages", []) and isinstance(state.get("messages", [])[-1], ToolMessage) else END,
-        {
-            "agent": "agent",
-            "__end__": END,
-        }
-    )
+    workflow.add_edge("tools", "agent")
+    workflow.set_entry_point("agent")
 
     # Add checkpointer for state persistence
-    memory = MemorySaver()
-    graph = builder.compile(checkpointer=memory)
+    checkpointer = MemorySaver()
+    graph = workflow.compile(checkpointer=checkpointer)
 
     return graph
 
@@ -745,7 +696,7 @@ async def global_exception_handler(request, exc):
     )
 
 # Note: AG-UI automatically handles camelCase <-> snake_case conversion
-agent = LangGraphAgent(
+agent = LangGraphAGUIAgent(
     name="file_investigator",
     graph=graph,
     description="AI-powered document analysis agent with dry humor",
@@ -785,6 +736,54 @@ agent.set_message_in_progress = types.MethodType(patched_set_message_in_progress
 
 logger = logging.getLogger("agent.patch")
 logger.info("✅ Applied monkey-patch to fix ag-ui-langgraph NoneType error")
+
+# Monkey-patch to filter out non-serializable config objects
+def filter_config_for_serialization(config):
+    """Filter out non-serializable objects from config dict."""
+    if not config:
+        return {}
+
+    filtered = {}
+    for key, value in config.items():
+        # Skip BotocoreConfig and other non-serializable objects
+        if key == "config":
+            continue
+        # Skip nested config objects
+        if isinstance(value, dict):
+            filtered[key] = filter_config_for_serialization(value)
+        else:
+            # Try to serialize to check if it's JSON-serializable
+            try:
+                import json
+                json.dumps(value)
+                filtered[key] = value
+            except (TypeError, ValueError):
+                # Skip non-serializable objects
+                logger.debug(f"⚠️ Skipping non-serializable config key: {key}")
+                continue
+    return filtered
+
+# Patch the _handle_stream_events method to filter config
+original_handle_stream_events = agent.__class__._handle_stream_events
+
+async def patched_handle_stream_events(self, input):
+    """Patched version that filters config before streaming."""
+    logger = logging.getLogger("agent.patch")
+
+    # Filter the input to remove non-serializable config
+    if "config" in input:
+        filtered_config = filter_config_for_serialization(input["config"])
+        input = input.copy(update={"config": filtered_config})
+        logger.debug(f"✅ Filtered config for serialization")
+
+    # Call original method
+    async for event in original_handle_stream_events(self, input):
+        yield event
+
+# Bind the patched method
+agent._handle_stream_events = types.MethodType(patched_handle_stream_events, agent)
+
+logger.info("✅ Applied monkey-patch to filter non-serializable config objects")
 
 # Add AG-UI endpoint to FastAPI app
 add_langgraph_fastapi_endpoint(app, agent, path="/copilotkit")

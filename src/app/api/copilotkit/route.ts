@@ -4,9 +4,11 @@ import {
   copilotRuntimeNextJSAppRouterEndpoint,
 } from "@copilotkit/runtime";
 
-import { HttpAgent } from "@ag-ui/client";  
+import { LangGraphHttpAgent } from "@copilotkit/runtime/langgraph";
+
+import { HttpAgent } from "@ag-ui/client";
 import { NextRequest } from "next/server";
- 
+
 // 1. You can use any service adapter here for multi-agent support. We use
 //    the empty adapter since we're only using one agent.
 const serviceAdapter = new ExperimentalEmptyAdapter();
@@ -15,7 +17,7 @@ const serviceAdapter = new ExperimentalEmptyAdapter();
 const runtime = new CopilotRuntime({
   agents: {
     // File Investigator agent - CopilotKit + LangGraph + Claude
-    file_investigator: new HttpAgent ({
+    file_investigator: new LangGraphHttpAgent({
       url: process.env.AGENT_URL || "http://localhost:8000/copilotkit",
     }),
   },

@@ -85,7 +85,17 @@
       "Bash(.venv/bin/python -c \"import ag_ui_langgraph; print\\(''OK:'', ag_ui_langgraph.__file__\\)\")",
       "Bash(.venv/bin/python -c \"import sys; sys.path.insert\\(0, ''.venv/lib/python3.12/site-packages''\\); import ag_ui_langgraph; import os; print\\(''File:'', ag_ui_langgraph.__file__\\); print\\(''Version info from package:'', os.path.dirname\\(ag_ui_langgraph.__file__\\).split\\(''/''\\)[-2]\\)\")",
       "Bash(cat .venv/lib/python3.12/site-packages/ag_ui_langgraph-0.0.23.dist-info/METADATA)",
-      "Bash(pnpm view @ag-ui/client versions --json)"
+      "Bash(pnpm view @ag-ui/client versions --json)",
+      "Bash(grep -r \"class CopilotRuntime\" node_modules/@copilotkit/runtime/dist/lib/*.d.ts)",
+      "Bash(lsof -i :8000 -t)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(uvicorn main:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(curl -s http://localhost:8000/copilotkit -X POST -H \"Content-Type: application/json\" -d '{}' --max-time 5)",
+      "Bash(curl -s http://localhost:8000/copilotkit -X POST -H \"Content-Type: application/json\" -d '{\"\"threadId\"\":\"\"test\"\",\"\"runId\"\":\"\"test\"\",\"\"state\"\":[],\"\"messages\"\":[{\"\"role\"\":\"\"user\"\",\"\"content\"\":\"\"hello\"\"}],\"\"tools\"\":[],\"\"context\"\":{},\"\"forwardedProps\"\":{}}' --max-time 10)",
+      "Bash(cat /tmp/claude/-Users-bennyyu-base-work-ido-ML-base-claude-strands-file-analyzer-demo/tasks/b21212d.output)",
+      "Bash(cat /tmp/claude/-Users-bennyyu-base-work-ido-ML-base-claude-strands-file-analyzer-demo/tasks/b63bbb3.output)",
+      "Bash(ls -la /Users/bennyyu/base/work/ido/ML/base/claude/strands-file-analyzer-demo/agent/.env*)",
+      "Bash(cat /Users/bennyyu/ML/base/claude/with-langgraph-fastapi_macos/agent/pyproject.toml)"
     ]
   }
 }
